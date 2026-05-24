@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+@theme {
+  --color-aurora-cyan: #00D9FF;
+  --color-aurora-pink: #FF6B9D;
+  --color-aurora-bg: #0a0e1a;
+  --color-aurora-surface: rgba(15, 23, 42, 0.8);
+  --color-aurora-border: rgba(0, 217, 255, 0.2);
+  --color-aurora-amber: #FFB800;
+  --color-aurora-purple: #C084FC;
+  --color-aurora-red: #FF4444;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: #0a0e1a;
+  color: #e2e8f0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Glass morphism panel */
+.glass-panel {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 217, 255, 0.15);
+  box-shadow: 0 0 20px rgba(0, 217, 255, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Neon glow text */
+.neon-text {
+  text-shadow: 0 0 10px rgba(0, 217, 255, 0.5), 0 0 20px rgba(0, 217, 255, 0.3);
+}
+
+.neon-text-pink {
+  text-shadow: 0 0 10px rgba(255, 107, 157, 0.5), 0 0 20px rgba(255, 107, 157, 0.3);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 217, 255, 0.2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 217, 255, 0.4);
+}
