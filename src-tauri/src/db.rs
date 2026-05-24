@@ -7,6 +7,7 @@ pub static DB: Lazy<Mutex<Connection>> = Lazy::new(|| {
     let db_path = get_db_path();
     let conn = Connection::open(&db_path).expect("Failed to open database");
     init_tables(&conn).expect("Failed to initialize tables");
+    backup_database(&db_path);
     Mutex::new(conn)
 });
 
@@ -16,6 +17,57 @@ fn get_db_path() -> PathBuf {
         .join("aurora");
     std::fs::create_dir_all(&app_dir).ok();
     app_dir.join("data.db")
+}
+
+fn get_backup_dir() -> PathBuf {
+    let app_dir = dirs::config_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap())
+        .join("aurora")
+        .join("backups");
+    std::fs::create_dir_all(&app_dir).ok();
+    app_dir
+}
+
+fn backup_database(db_path: &PathBuf) {
+    let backup_dir = get_backup_dir();
+    if !db_path.exists() {
+        return;
+    }
+
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let backup_filename = format!("data_backup_{}.db", timestamp);
+    let backup_path = backup_dir.join(backup_filename);
+
+    match std::fs::copy(db_path, &backup_path) {
+        Ok(_) => {
+            println!("Database backed up to: {:?}", backup_path);
+            cleanup_old_backups(&backup_dir);
+        }
+        Err(e) => {
+            eprintln!("Failed to backup database: {}", e);
+        }
+    }
+}
+
+fn cleanup_old_backups(backup_dir: &PathBuf) {
+    let mut backups: Vec<std::fs::DirEntry> = match std::fs::read_dir(backup_dir) {
+        Ok(entries) => entries.filter_map(|e| e.ok()).collect(),
+        Err(_) => return,
+    };
+
+    // Sort by modified time (oldest first)
+    backups.sort_by(|a, b| {
+        let a_time = a.metadata().and_then(|m| m.modified()).ok();
+        let b_time = b.metadata().and_then(|m| m.modified()).ok();
+        a_time.cmp(&b_time)
+    });
+
+    // Keep only the 10 most recent backups
+    if backups.len() > 10 {
+        for old_backup in backups.iter().take(backups.len() - 10) {
+            let _ = std::fs::remove_file(old_backup.path());
+        }
+    }
 }
 
 fn init_tables(conn: &Connection) -> SqlResult<()> {

@@ -295,6 +295,295 @@ pub fn db_get_logs(goal_id: Option<i64>, date: Option<String>) -> Result<Vec<Dai
     Ok(logs)
 }
 
+// ===== Milestone Commands =====
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Milestone {
+    pub id: i64,
+    pub goal_id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub sequence_order: i32,
+    pub target_date: Option<String>,
+    pub status: String,
+    pub unlock_condition: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateMilestoneRequest {
+    pub goal_id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub sequence_order: Option<i32>,
+    pub target_date: Option<String>,
+    pub unlock_condition: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateMilestoneRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub sequence_order: Option<i32>,
+    pub target_date: Option<String>,
+    pub status: Option<String>,
+    pub unlock_condition: Option<String>,
+}
+
+#[command]
+pub fn db_get_milestones(goal_id: i64) -> Result<Vec<Milestone>, String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, goal_id, name, description, sequence_order, target_date, status, unlock_condition FROM milestones WHERE goal_id = ? ORDER BY sequence_order")
+        .map_err(|e| e.to_string())?;
+    let milestones = stmt
+        .query_map([goal_id], |row| {
+            Ok(Milestone {
+                id: row.get(0)?,
+                goal_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                sequence_order: row.get(4)?,
+                target_date: row.get(5)?,
+                status: row.get(6)?,
+                unlock_condition: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(milestones)
+}
+
+#[command]
+pub fn db_create_milestone(req: CreateMilestoneRequest) -> Result<Milestone, String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let order = req.sequence_order.unwrap_or(0);
+    conn.execute(
+        "INSERT INTO milestones (goal_id, name, description, sequence_order, target_date, unlock_condition) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![req.goal_id, req.name, req.description, order, req.target_date, req.unlock_condition],
+    )
+    .map_err(|e| e.to_string())?;
+    let id = conn.last_insert_rowid();
+    Ok(Milestone {
+        id,
+        goal_id: req.goal_id,
+        name: req.name,
+        description: req.description,
+        sequence_order: order,
+        target_date: req.target_date,
+        status: "locked".to_string(),
+        unlock_condition: req.unlock_condition,
+    })
+}
+
+#[command]
+pub fn db_update_milestone(id: i64, req: UpdateMilestoneRequest) -> Result<Milestone, String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let mut values: Vec<rusqlite::types::Value> = vec![];
+    let mut fields = vec![];
+
+    if let Some(name) = req.name {
+        fields.push("name = ?".to_string());
+        values.push(name.into());
+    }
+    if let Some(description) = req.description {
+        fields.push("description = ?".to_string());
+        values.push(description.into());
+    }
+    if let Some(order) = req.sequence_order {
+        fields.push("sequence_order = ?".to_string());
+        values.push(order.into());
+    }
+    if let Some(target_date) = req.target_date {
+        fields.push("target_date = ?".to_string());
+        values.push(target_date.into());
+    }
+    if let Some(status) = req.status {
+        fields.push("status = ?".to_string());
+        values.push(status.into());
+    }
+    if let Some(unlock_condition) = req.unlock_condition {
+        fields.push("unlock_condition = ?".to_string());
+        values.push(unlock_condition.into());
+    }
+
+    if !fields.is_empty() {
+        let sql = format!("UPDATE milestones SET {} WHERE id = ?", fields.join(", "));
+        values.push(id.into());
+        let refs: Vec<&dyn rusqlite::ToSql> = values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+        conn.execute(&sql, rusqlite::params_from_iter(refs))
+            .map_err(|e| e.to_string())?;
+    }
+
+    let mut stmt = conn
+        .prepare("SELECT id, goal_id, name, description, sequence_order, target_date, status, unlock_condition FROM milestones WHERE id = ?")
+        .map_err(|e| e.to_string())?;
+    let milestone = stmt
+        .query_row([id], |row| {
+            Ok(Milestone {
+                id: row.get(0)?,
+                goal_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                sequence_order: row.get(4)?,
+                target_date: row.get(5)?,
+                status: row.get(6)?,
+                unlock_condition: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(milestone)
+}
+
+#[command]
+pub fn db_delete_milestone(id: i64) -> Result<(), String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM milestones WHERE id = ?", [id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ===== Action Commands =====
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ActionItem {
+    pub id: i64,
+    pub milestone_id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub suggested_count: i32,
+    pub unit: String,
+    pub frequency: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateActionRequest {
+    pub milestone_id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub suggested_count: Option<i32>,
+    pub unit: Option<String>,
+    pub frequency: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateActionRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub suggested_count: Option<i32>,
+    pub unit: Option<String>,
+    pub frequency: Option<String>,
+}
+
+#[command]
+pub fn db_get_actions(milestone_id: i64) -> Result<Vec<ActionItem>, String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, milestone_id, name, description, suggested_count, unit, frequency FROM actions WHERE milestone_id = ? ORDER BY id")
+        .map_err(|e| e.to_string())?;
+    let actions = stmt
+        .query_map([milestone_id], |row| {
+            Ok(ActionItem {
+                id: row.get(0)?,
+                milestone_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                suggested_count: row.get(4)?,
+                unit: row.get(5)?,
+                frequency: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(actions)
+}
+
+#[command]
+pub fn db_create_action(req: CreateActionRequest) -> Result<ActionItem, String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let count = req.suggested_count.unwrap_or(1);
+    let unit = req.unit.unwrap_or_else(|| "次".to_string());
+    let frequency = req.frequency.unwrap_or_else(|| "daily".to_string());
+    conn.execute(
+        "INSERT INTO actions (milestone_id, name, description, suggested_count, unit, frequency) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![req.milestone_id, req.name, req.description, count, &unit, &frequency],
+    )
+    .map_err(|e| e.to_string())?;
+    let id = conn.last_insert_rowid();
+    Ok(ActionItem {
+        id,
+        milestone_id: req.milestone_id,
+        name: req.name,
+        description: req.description,
+        suggested_count: count,
+        unit,
+        frequency,
+    })
+}
+
+#[command]
+pub fn db_update_action(id: i64, req: UpdateActionRequest) -> Result<ActionItem, String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let mut values: Vec<rusqlite::types::Value> = vec![];
+    let mut fields = vec![];
+
+    if let Some(name) = req.name {
+        fields.push("name = ?".to_string());
+        values.push(name.into());
+    }
+    if let Some(description) = req.description {
+        fields.push("description = ?".to_string());
+        values.push(description.into());
+    }
+    if let Some(count) = req.suggested_count {
+        fields.push("suggested_count = ?".to_string());
+        values.push(count.into());
+    }
+    if let Some(unit) = req.unit {
+        fields.push("unit = ?".to_string());
+        values.push(unit.into());
+    }
+    if let Some(frequency) = req.frequency {
+        fields.push("frequency = ?".to_string());
+        values.push(frequency.into());
+    }
+
+    if !fields.is_empty() {
+        let sql = format!("UPDATE actions SET {} WHERE id = ?", fields.join(", "));
+        values.push(id.into());
+        let refs: Vec<&dyn rusqlite::ToSql> = values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+        conn.execute(&sql, rusqlite::params_from_iter(refs))
+            .map_err(|e| e.to_string())?;
+    }
+
+    let mut stmt = conn
+        .prepare("SELECT id, milestone_id, name, description, suggested_count, unit, frequency FROM actions WHERE id = ?")
+        .map_err(|e| e.to_string())?;
+    let action = stmt
+        .query_row([id], |row| {
+            Ok(ActionItem {
+                id: row.get(0)?,
+                milestone_id: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                suggested_count: row.get(4)?,
+                unit: row.get(5)?,
+                frequency: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(action)
+}
+
+#[command]
+pub fn db_delete_action(id: i64) -> Result<(), String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM actions WHERE id = ?", [id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // ===== Settings Commands =====
 
 #[command]
