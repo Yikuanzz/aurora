@@ -6,6 +6,7 @@ import {
   BarChart3,
   Settings,
   PenLine,
+  Minus,
 } from "lucide-react";
 import HomePage from "./pages/HomePage";
 import GoalsPage from "./pages/GoalsPage";
@@ -28,6 +29,7 @@ function App() {
   const [currentView, setCurrentView] = useState<View>("home");
   const [auroraPanelOpen, setAuroraPanelOpen] = useState(false);
   const [logFormOpen, setLogFormOpen] = useState(false);
+  const [dockVisible, setDockVisible] = useState(true);
 
   return (
     <div className="flex h-screen w-screen bg-aurora-bg text-slate-200 overflow-hidden">
@@ -88,42 +90,99 @@ function App() {
           </motion.div>
         </AnimatePresence>
 
-        {/* Aurora Character - Bottom Left — always on top */}
-        <div className="absolute bottom-0 left-0 z-[60] pointer-events-none">
-          <div
-            className="relative pointer-events-auto cursor-pointer group"
-            onClick={() => setAuroraPanelOpen(!auroraPanelOpen)}
-          >
-            {/* Soft ambient glow */}
-            <div
-              className="absolute -bottom-12 left-1/2 -translate-x-1/2 w-80 h-32 rounded-full pointer-events-none"
-              style={{
-                background: "radial-gradient(ellipse at center, rgba(10,30,50,0.5) 0%, rgba(10,14,26,0) 70%)",
-                filter: "blur(24px)",
-              }}
-            />
-            <div
-              className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-56 h-16 rounded-full pointer-events-none"
-              style={{
-                background: "radial-gradient(ellipse at center, rgba(0,217,255,0.06) 0%, transparent 60%)",
-                filter: "blur(16px)",
-              }}
-            />
+        {/* Aurora Character - Bottom Left */}
+        <motion.div
+          className="absolute bottom-0 left-0 z-[60] pointer-events-none"
+          initial={false}
+          animate={{
+            x: dockVisible ? 0 : -240,
+            opacity: dockVisible ? 1 : 0,
+          }}
+          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+        >
+          <div className="relative pointer-events-auto">
+            {/* Collapse button */}
+            <button
+              onClick={() => setDockVisible(false)}
+              className="absolute top-4 right-2 z-10 w-7 h-7 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white/40 hover:text-white/70 hover:bg-white/10 transition-colors"
+              title="收起"
+            >
+              <Minus size={14} />
+            </button>
 
-            <img
-              src="/aurora_立绘.png"
-              alt="Aurora"
-              className="h-[420px] w-auto object-contain transition-all duration-500 group-hover:brightness-110"
-              style={{
-                maskImage: "linear-gradient(to bottom, black 92%, transparent 100%)",
-                mixBlendMode: "multiply",
-              }}
-            />
+            <div
+              className="relative cursor-pointer group"
+              onClick={() => setAuroraPanelOpen(!auroraPanelOpen)}
+            >
+              {/* Soft ambient glow */}
+              <div
+                className="absolute -bottom-12 left-1/2 -translate-x-1/2 w-80 h-32 rounded-full pointer-events-none"
+                style={{
+                  background: "radial-gradient(ellipse at center, rgba(10,30,50,0.5) 0%, rgba(10,14,26,0) 70%)",
+                  filter: "blur(24px)",
+                }}
+              />
+              <div
+                className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-56 h-16 rounded-full pointer-events-none"
+                style={{
+                  background: "radial-gradient(ellipse at center, rgba(0,217,255,0.06) 0%, transparent 60%)",
+                  filter: "blur(16px)",
+                }}
+              />
 
-            {/* Emotion border glow */}
-            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-36 h-36 rounded-full border border-aurora-cyan/[0.08] animate-pulse pointer-events-none" />
+              <img
+                src="/aurora_立绘.png"
+                alt="Aurora"
+                className="h-[420px] w-auto object-contain transition-all duration-500 group-hover:brightness-110"
+                style={{
+                  maskImage: "linear-gradient(to bottom, black 92%, transparent 100%)",
+                  mixBlendMode: "multiply",
+                }}
+              />
+
+              {/* Emotion border glow */}
+              <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-36 h-36 rounded-full border border-aurora-cyan/[0.08] animate-pulse pointer-events-none" />
+            </div>
           </div>
-        </div>
+        </motion.div>
+
+        {/* Expand trigger - visible when collapsed */}
+        <AnimatePresence>
+          {!dockVisible && (
+            <motion.button
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ type: "spring", stiffness: 300, damping: 25 }}
+              onClick={() => setDockVisible(true)}
+              className="absolute bottom-6 left-6 z-50 flex items-center gap-2 px-3 py-2 rounded-full glass-panel border border-aurora-border/50 text-slate-300 hover:text-aurora-cyan hover:border-aurora-cyan/30 transition-colors"
+            >
+              <img
+                src="/aurora_头像.png"
+                alt="Aurora"
+                className="w-7 h-7 rounded-full object-cover"
+              />
+              <span className="text-xs">展开</span>
+            </motion.button>
+          )}
+        </AnimatePresence>
+
+        {/* Floating Action Button */}
+        <motion.button
+          initial={false}
+          animate={{
+            x: dockVisible ? 0 : 80,
+            opacity: dockVisible ? 1 : 0,
+          }}
+          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={() => setLogFormOpen(true)}
+          className="absolute bottom-6 right-6 z-30 w-14 h-14 rounded-full bg-gradient-to-br from-aurora-cyan to-aurora-pink shadow-lg shadow-aurora-cyan/30 flex items-center justify-center text-white hover:shadow-xl hover:shadow-aurora-cyan/40 transition-shadow"
+          title="记一笔"
+        >
+          <PenLine size={24} />
+        </motion.button>
       </main>
 
       {/* Aurora Chat Panel */}
@@ -131,17 +190,6 @@ function App() {
         isOpen={auroraPanelOpen}
         onClose={() => setAuroraPanelOpen(false)}
       />
-
-      {/* Floating Action Button */}
-      <motion.button
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-        onClick={() => setLogFormOpen(true)}
-        className="absolute bottom-6 right-6 z-30 w-14 h-14 rounded-full bg-gradient-to-br from-aurora-cyan to-aurora-pink shadow-lg shadow-aurora-cyan/30 flex items-center justify-center text-white hover:shadow-xl hover:shadow-aurora-cyan/40 transition-shadow"
-        title="记一笔"
-      >
-        <PenLine size={24} />
-      </motion.button>
 
       {/* Log Form Modal */}
       <LogForm isOpen={logFormOpen} onClose={() => setLogFormOpen(false)} />

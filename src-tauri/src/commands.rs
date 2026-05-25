@@ -878,7 +878,8 @@ pub fn import_data(req: ImportDataRequest) -> Result<(), String> {
 
 // ===== AI Chat Commands =====
 
-use crate::ai::{chat_completion, ChatMessage};
+use tauri::Emitter;
+use crate::ai::{chat_completion, chat_completion_stream, list_models, test_connection, ChatMessage, ApiProvider};
 
 #[derive(Debug, Deserialize)]
 pub struct AIChatRequest {
@@ -887,7 +888,7 @@ pub struct AIChatRequest {
 
 #[command]
 pub async fn ai_chat(req: AIChatRequest) -> Result<String, String> {
-    let (api_key, base_url, model) = {
+    let (api_key, base_url, model, provider) = {
         let conn = DB.lock().map_err(|e| e.to_string())?;
 
         let api_key: String = conn
@@ -902,9 +903,215 @@ pub async fn ai_chat(req: AIChatRequest) -> Result<String, String> {
             .query_row("SELECT value FROM app_settings WHERE key = 'model'", [], |row| row.get(0))
             .unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
 
-        (api_key, base_url, model)
+        let provider_str: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'api_provider'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "anthropic".to_string());
+
+        (api_key, base_url, model, ApiProvider::from_str(&provider_str))
     };
 
-    let content = chat_completion(api_key, base_url, model, req.messages).await?;
+    let content = chat_completion(api_key, base_url, model, provider, req.messages).await?;
     Ok(content)
+}
+
+#[command]
+pub async fn ai_chat_stream(app: tauri::AppHandle, req: AIChatRequest) -> Result<(), String> {
+    let (api_key, base_url, model, provider) = {
+        let conn = DB.lock().map_err(|e| e.to_string())?;
+
+        let api_key: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'api_key'", [], |row| row.get(0))
+            .map_err(|_| "未配置 API Key，请先在设置中添加".to_string())?;
+
+        let base_url: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'base_url'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+
+        let model: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'model'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
+
+        let provider_str: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'api_provider'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "anthropic".to_string());
+
+        (api_key, base_url, model, ApiProvider::from_str(&provider_str))
+    };
+
+    let result = chat_completion_stream(api_key, base_url, model, provider, req.messages, |chunk| {
+        app.emit("ai-chat-chunk", serde_json::json!({ "chunk": chunk }))
+            .map_err(|e| e.to_string())
+    }).await;
+
+    match result {
+        Ok(()) => {
+            app.emit("ai-chat-done", serde_json::json!({}))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        Err(e) => {
+            app.emit("ai-chat-error", serde_json::json!({ "error": e }))
+                .map_err(|e| e.to_string())?;
+            Err(e)
+        }
+    }
+}
+
+#[command]
+pub async fn ai_list_models() -> Result<Vec<String>, String> {
+    let (api_key, base_url, provider) = {
+        let conn = DB.lock().map_err(|e| e.to_string())?;
+
+        let api_key: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'api_key'", [], |row| row.get(0))
+            .map_err(|_| "未配置 API Key，请先在设置中添加".to_string())?;
+
+        let base_url: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'base_url'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+
+        let provider_str: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'api_provider'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "anthropic".to_string());
+
+        (api_key, base_url, ApiProvider::from_str(&provider_str))
+    };
+
+    let models = list_models(api_key, base_url, provider).await?;
+    Ok(models)
+}
+
+#[command]
+pub async fn ai_test_connection() -> Result<String, String> {
+    let (api_key, base_url, model, provider) = {
+        let conn = DB.lock().map_err(|e| e.to_string())?;
+
+        let api_key: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'api_key'", [], |row| row.get(0))
+            .map_err(|_| "未配置 API Key，请先在设置中添加".to_string())?;
+
+        let base_url: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'base_url'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+
+        let model: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'model'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
+
+        let provider_str: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'api_provider'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "anthropic".to_string());
+
+        (api_key, base_url, model, ApiProvider::from_str(&provider_str))
+    };
+
+    let response = test_connection(api_key, base_url, model, provider).await?;
+    Ok(response)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SuggestMilestonesRequest {
+    pub goal_name: String,
+    pub goal_description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SuggestedMilestone {
+    pub name: String,
+    pub description: String,
+    pub sequence_order: i32,
+}
+
+#[command]
+pub async fn ai_suggest_milestones(req: SuggestMilestonesRequest) -> Result<Vec<SuggestedMilestone>, String> {
+    let (api_key, base_url, model, provider) = {
+        let conn = DB.lock().map_err(|e| e.to_string())?;
+
+        let api_key: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'api_key'", [], |row| row.get(0))
+            .map_err(|_| "未配置 API Key，请先在设置中添加".to_string())?;
+
+        let base_url: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'base_url'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+
+        let model: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'model'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
+
+        let provider_str: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'api_provider'", [], |row| row.get(0))
+            .unwrap_or_else(|_| "anthropic".to_string());
+
+        (api_key, base_url, model, ApiProvider::from_str(&provider_str))
+    };
+
+    let system_prompt = r#"你是一个目标规划专家。你的任务是根据用户的目标，生成3-5个合理的里程碑。
+
+规则：
+1. 里程碑应该是可达成的、有明确完成标准的阶段性成果
+2. 里程碑应该有逻辑顺序，从易到难
+3. 每个里程碑包含：name（简短名称，10字以内）、description（详细描述，30字以内）
+4. 必须以 JSON 数组格式返回，不要包含任何其他文字
+5. JSON 格式：[{"name": "...", "description": "..."}, ...]
+
+示例输出：
+[{"name": "环境搭建", "description": "安装开发工具，配置开发环境"}, {"name": "基础语法", "description": "掌握基本语法和数据类型"}]"#;
+
+    let user_prompt = format!(
+        "请为以下目标生成里程碑：\n\n目标名称：{}\n目标描述：{}\n\n请只返回 JSON 数组。",
+        req.goal_name,
+        req.goal_description.unwrap_or_default()
+    );
+
+    let messages = vec![
+        ChatMessage { role: "system".to_string(), content: system_prompt.to_string() },
+        ChatMessage { role: "user".to_string(), content: user_prompt },
+    ];
+
+    let content = chat_completion(api_key, base_url, model, provider, messages).await?;
+
+    // Parse JSON response
+    let json_str = extract_json_array(&content)?;
+    let milestones: Vec<SuggestedMilestone> = serde_json::from_str(&json_str)
+        .map_err(|e| format!("解析里程碑建议失败: {}。原始响应: {}", e, content))?;
+
+    let milestones_with_order: Vec<SuggestedMilestone> = milestones
+        .into_iter()
+        .enumerate()
+        .map(|(i, m)| SuggestedMilestone {
+            name: m.name,
+            description: m.description,
+            sequence_order: i as i32,
+        })
+        .collect();
+
+    Ok(milestones_with_order)
+}
+
+fn extract_json_array(text: &str) -> Result<String, String> {
+    // Try to find JSON array in the text
+    let start = text.find('[').ok_or("未找到 JSON 数组")?;
+    let end = text.rfind(']').ok_or("未找到 JSON 数组结束")?;
+    if start > end {
+        return Err("JSON 数组格式错误".to_string());
+    }
+    Ok(text[start..=end].to_string())
+}
+
+// ===== Tavily Search Commands =====
+
+use crate::tavily::{search as tavily_search_api, TavilySearchRequest, TavilySearchResponse};
+
+#[command]
+pub async fn tavily_search(req: TavilySearchRequest) -> Result<TavilySearchResponse, String> {
+    let api_key = {
+        let conn = DB.lock().map_err(|e| e.to_string())?;
+        conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'tavily_api_key'", [], |row| row.get::<_, String>(0))
+            .map_err(|_| "未配置 Tavily API Key，请先在设置中添加".to_string())?
+    };
+
+    let result = tavily_search_api(api_key, req).await?;
+    Ok(result)
 }

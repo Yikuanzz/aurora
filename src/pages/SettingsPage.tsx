@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
+import { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { createPortal } from "react-dom";
 import {
   Settings,
   Key,
@@ -14,6 +15,9 @@ import {
   CheckCircle2,
   ExternalLink,
   Info,
+  RefreshCw,
+  Wifi,
+  ChevronDown,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -21,6 +25,8 @@ interface SettingsData {
   api_key: string;
   base_url: string;
   model: string;
+  api_provider: "openai" | "anthropic";
+  tavily_api_key: string;
   theme: "dark" | "light";
   animations_enabled: boolean;
   sound_enabled: boolean;
@@ -30,10 +36,28 @@ const DEFAULT_SETTINGS: SettingsData = {
   api_key: "",
   base_url: "https://api.anthropic.com",
   model: "claude-sonnet-4-6",
+  api_provider: "anthropic",
+  tavily_api_key: "",
   theme: "dark",
   animations_enabled: true,
   sound_enabled: false,
 };
+
+const OPENAI_DEFAULT_MODELS = [
+  "gpt-4.1",
+  "gpt-4o",
+  "gpt-4o-mini",
+  "o3-mini",
+  "o1",
+];
+
+const ANTHROPIC_DEFAULT_MODELS = [
+  "claude-sonnet-4-6",
+  "claude-opus-4-6",
+  "claude-haiku-4-5-20251001",
+  "claude-3-5-sonnet-20241022",
+  "claude-3-opus-20240229",
+];
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsData>(DEFAULT_SETTINGS);
@@ -41,9 +65,39 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
+  const modelTriggerRef = useRef<HTMLButtonElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadSettings();
+  }, []);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        modelDropdownRef.current &&
+        !modelDropdownRef.current.contains(event.target as Node) &&
+        modelTriggerRef.current &&
+        !modelTriggerRef.current.contains(event.target as Node)
+      ) {
+        setModelDropdownOpen(false);
+      }
+    }
+    function handleResize() {
+      setModelDropdownOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    window.addEventListener("resize", handleResize);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("resize", handleResize);
+    };
   }, []);
 
   async function loadSettings() {
@@ -56,6 +110,11 @@ export default function SettingsPage() {
       const model =
         (await invoke<string | null>("settings_get", { key: "model" })) ||
         DEFAULT_SETTINGS.model;
+      const provider =
+        ((await invoke<string | null>("settings_get", { key: "api_provider" })) as "openai" | "anthropic") ||
+        DEFAULT_SETTINGS.api_provider;
+      const tavilyApiKey =
+        (await invoke<string | null>("settings_get", { key: "tavily_api_key" })) || "";
       const theme =
         ((await invoke<string | null>("settings_get", { key: "theme" })) as "dark" | "light") ||
         "dark";
@@ -68,6 +127,8 @@ export default function SettingsPage() {
         api_key: apiKey,
         base_url: baseUrl,
         model,
+        api_provider: provider,
+        tavily_api_key: tavilyApiKey,
         theme,
         animations_enabled: animations,
         sound_enabled: sound,
@@ -76,6 +137,82 @@ export default function SettingsPage() {
       console.error("Failed to load settings:", e);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchModels() {
+    if (!settings.api_key.trim()) {
+      setMessage({ type: "error", text: "请先填写 API Key" });
+      return;
+    }
+    setFetchingModels(true);
+    setMessage(null);
+    try {
+      // 先保存当前设置，确保后端能读取到
+      await invoke("settings_set", {
+        key: "api_key",
+        value: settings.api_key,
+        encrypt: true,
+      });
+      await invoke("settings_set", {
+        key: "base_url",
+        value: settings.base_url,
+        encrypt: false,
+      });
+      await invoke("settings_set", {
+        key: "api_provider",
+        value: settings.api_provider,
+        encrypt: false,
+      });
+
+      const list = await invoke<string[]>("ai_list_models");
+      setModels(list);
+      setMessage({ type: "success", text: `获取到 ${list.length} 个模型` });
+    } catch (e) {
+      console.error("Failed to fetch models:", e);
+      setMessage({ type: "error", text: String(e) });
+    } finally {
+      setFetchingModels(false);
+    }
+  }
+
+  async function testConnection() {
+    if (!settings.api_key.trim()) {
+      setMessage({ type: "error", text: "请先填写 API Key" });
+      return;
+    }
+    setTestingConnection(true);
+    setMessage(null);
+    try {
+      // 先保存当前设置
+      await invoke("settings_set", {
+        key: "api_key",
+        value: settings.api_key,
+        encrypt: true,
+      });
+      await invoke("settings_set", {
+        key: "base_url",
+        value: settings.base_url,
+        encrypt: false,
+      });
+      await invoke("settings_set", {
+        key: "model",
+        value: settings.model,
+        encrypt: false,
+      });
+      await invoke("settings_set", {
+        key: "api_provider",
+        value: settings.api_provider,
+        encrypt: false,
+      });
+
+      const response = await invoke<string>("ai_test_connection");
+      setMessage({ type: "success", text: `连接成功！响应: ${response.slice(0, 20)}...` });
+    } catch (e) {
+      console.error("Connection test failed:", e);
+      setMessage({ type: "error", text: String(e) });
+    } finally {
+      setTestingConnection(false);
     }
   }
 
@@ -97,6 +234,16 @@ export default function SettingsPage() {
         key: "model",
         value: settings.model,
         encrypt: false,
+      });
+      await invoke("settings_set", {
+        key: "api_provider",
+        value: settings.api_provider,
+        encrypt: false,
+      });
+      await invoke("settings_set", {
+        key: "tavily_api_key",
+        value: settings.tavily_api_key,
+        encrypt: true,
       });
       await invoke("settings_set", {
         key: "theme",
@@ -165,6 +312,34 @@ export default function SettingsPage() {
     }));
   }
 
+  function handleProviderChange(provider: "openai" | "anthropic") {
+    const defaultModel = provider === "openai"
+      ? OPENAI_DEFAULT_MODELS[0]
+      : ANTHROPIC_DEFAULT_MODELS[0];
+    const defaultUrl = provider === "openai"
+      ? "https://api.openai.com"
+      : "https://api.anthropic.com";
+
+    setSettings((prev) => ({
+      ...prev,
+      api_provider: provider,
+      model: defaultModel,
+      base_url: defaultUrl,
+    }));
+    setModels([]);
+  }
+
+  const defaultModels = settings.api_provider === "openai"
+    ? OPENAI_DEFAULT_MODELS
+    : ANTHROPIC_DEFAULT_MODELS;
+
+  const apiKeyLabel = settings.api_provider === "openai"
+    ? "OpenAI API Key"
+    : "Anthropic API Key";
+  const apiKeyPlaceholder = settings.api_provider === "openai"
+    ? "sk-..."
+    : "sk-ant-api03-...";
+
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -185,7 +360,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto pb-4 space-y-6">
+      <div ref={scrollContainerRef} onScroll={() => setModelDropdownOpen(false)} className="flex-1 overflow-y-auto pb-4 space-y-6 scrollbar-hide">
         {/* API Settings */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
@@ -198,17 +373,63 @@ export default function SettingsPage() {
           </div>
 
           <div className="space-y-4">
+            {/* Provider Selector */}
             <div>
-              <label className="block text-sm text-slate-400 mb-1.5">Anthropic API Key</label>
+              <label className="block text-sm text-slate-400 mb-1.5">API 格式</label>
+              <div className="flex rounded-xl border border-aurora-border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => handleProviderChange("anthropic")}
+                  className={`flex-1 px-4 py-2.5 text-sm transition-colors ${
+                    settings.api_provider === "anthropic"
+                      ? "bg-aurora-cyan/15 text-aurora-cyan"
+                      : "text-slate-500 hover:text-slate-300"
+                  }`}
+                >
+                  Anthropic
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleProviderChange("openai")}
+                  className={`flex-1 px-4 py-2.5 text-sm transition-colors ${
+                    settings.api_provider === "openai"
+                      ? "bg-aurora-cyan/15 text-aurora-cyan"
+                      : "text-slate-500 hover:text-slate-300"
+                  }`}
+                >
+                  OpenAI
+                </button>
+              </div>
+              <p className="text-xs text-slate-600 mt-1">
+                选择你的 API 提供商格式。Anthropic 使用 Claude 模型，OpenAI 使用 GPT 模型。
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm text-slate-400 mb-1.5">{apiKeyLabel}</label>
               <input
                 type="password"
                 value={settings.api_key}
                 onChange={(e) => setSettings({ ...settings, api_key: e.target.value })}
-                placeholder="sk-ant-api03-..."
+                placeholder={apiKeyPlaceholder}
                 className="w-full bg-white/5 border border-aurora-border rounded-xl px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-aurora-cyan/50 transition-colors"
               />
               <p className="text-xs text-slate-600 mt-1">
                 用于 Aurora AI 对话功能。密钥将被加密存储在本地。
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm text-slate-400 mb-1.5">Tavily API Key</label>
+              <input
+                type="password"
+                value={settings.tavily_api_key}
+                onChange={(e) => setSettings({ ...settings, tavily_api_key: e.target.value })}
+                placeholder="tvly-..."
+                className="w-full bg-white/5 border border-aurora-border rounded-xl px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-aurora-cyan/50 transition-colors"
+              />
+              <p className="text-xs text-slate-600 mt-1">
+                用于网页搜索功能。在 tavily.com 获取免费 API Key。
               </p>
             </div>
 
@@ -218,28 +439,102 @@ export default function SettingsPage() {
                 type="text"
                 value={settings.base_url}
                 onChange={(e) => setSettings({ ...settings, base_url: e.target.value })}
-                placeholder="https://api.anthropic.com"
+                placeholder={settings.api_provider === "openai" ? "https://api.openai.com" : "https://api.anthropic.com"}
                 className="w-full bg-white/5 border border-aurora-border rounded-xl px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-aurora-cyan/50 transition-colors"
               />
             </div>
 
             <div>
-              <label className="block text-sm text-slate-400 mb-1.5">模型</label>
-              <select
-                value={settings.model}
-                onChange={(e) => setSettings({ ...settings, model: e.target.value })}
-                className="w-full bg-white/5 border border-aurora-border rounded-xl px-4 py-2.5 text-slate-200 focus:outline-none focus:border-aurora-cyan/50 transition-colors appearance-none"
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-sm text-slate-400">模型</label>
+                <div className="flex gap-2"
+                >
+                  <button
+                    type="button"
+                    onClick={fetchModels}
+                    disabled={fetchingModels}
+                    className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-white/5 border border-aurora-border text-slate-400 hover:text-aurora-cyan hover:border-aurora-cyan/30 transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} className={fetchingModels ? "animate-spin" : ""} />
+                    {fetchingModels ? "获取中..." : "获取模型"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={testConnection}
+                    disabled={testingConnection}
+                    className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-white/5 border border-aurora-border text-slate-400 hover:text-green-400 hover:border-green-400/30 transition-colors disabled:opacity-50"
+                  >
+                    <Wifi size={12} className={testingConnection ? "animate-pulse" : ""} />
+                    {testingConnection ? "测试中..." : "测试连接"}
+                  </button>
+                </div>
+              </div>
+              <div className="relative"
               >
-                <option value="claude-sonnet-4-6" className="bg-aurora-bg">
-                  Claude Sonnet 4.6
-                </option>
-                <option value="claude-opus-4-6" className="bg-aurora-bg">
-                  Claude Opus 4.6
-                </option>
-                <option value="claude-haiku-4-5" className="bg-aurora-bg">
-                  Claude Haiku 4.5
-                </option>
-              </select>
+                <button
+                  ref={modelTriggerRef}
+                  type="button"
+                  onClick={() => {
+                    if (!modelDropdownOpen && modelTriggerRef.current) {
+                      const rect = modelTriggerRef.current.getBoundingClientRect();
+                      setDropdownPos({
+                        top: rect.bottom + 6,
+                        left: rect.left,
+                        width: rect.width,
+                      });
+                    }
+                    setModelDropdownOpen(!modelDropdownOpen);
+                  }}
+                  className="w-full bg-white/5 border border-aurora-border rounded-xl px-4 py-2.5 text-slate-200 focus:outline-none focus:border-aurora-cyan/50 transition-colors flex items-center justify-between"
+                >
+                  <span className="truncate">{settings.model}</span>
+                  <ChevronDown
+                    size={14}
+                    className={`text-slate-500 transition-transform flex-shrink-0 ml-2 ${
+                      modelDropdownOpen ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
+
+                {modelDropdownOpen && dropdownPos &&
+                  createPortal(
+                    <motion.div
+                      ref={modelDropdownRef}
+                      initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute z-[100] glass-panel border border-aurora-border rounded-xl overflow-hidden max-h-60 overflow-y-auto scrollbar-hide"
+                      style={{
+                        top: dropdownPos.top,
+                        left: dropdownPos.left,
+                        width: dropdownPos.width,
+                      }}
+                    >
+                      {(models.length > 0 ? models : defaultModels).map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => {
+                            setSettings({ ...settings, model: m });
+                            setModelDropdownOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${
+                            settings.model === m
+                              ? "bg-aurora-cyan/15 text-aurora-cyan"
+                              : "text-slate-300 hover:bg-white/5 hover:text-slate-100"
+                          }`}
+                        >
+                          {m}
+                        </button>
+                      ))}
+                    </motion.div>,
+                    document.body
+                  )}
+              </div>
+              {models.length > 0 && (
+                <p className="text-xs text-slate-600 mt-1">从 API 获取到 {models.length} 个可用模型</p>
+              )}
             </div>
           </div>
         </motion.div>

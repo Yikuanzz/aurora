@@ -22,19 +22,19 @@
 
 - [x] **记一笔表单** (`LogForm.tsx`) — 完整表单 + 日期选择 + 保存并继续 + 自动更新进度
 - [x] **星图可视化** (`StarMap.tsx`) — 抽象星系节点图，轨道环、进度环、脉冲动画
-- [x] **AI 聊天后端** — Rust `ai_chat` 命令，接入 OpenAI 风格 API（同步版，流式待优化）
+- [x] **AI 聊天后端** — Rust `ai_chat` + `ai_chat_stream` 命令，接入 OpenAI 风格 API，支持 SSE 流式输出
 - [x] **AI 聊天前端** — Aurora 聊天面板：消息列表、输入框、发送、情绪状态显示
 - [x] **Home 页内容** — 指挥舱：今日概览、快速操作、Aurora 问候语、最近记录、目标进度
 
 ## 中优先级
 
-- [ ] **里程碑管理** — Rust 命令层（CRUD）、前端里程碑列表/编辑
-- [ ] **行动建议管理** — Rust 命令层（CRUD）
+- [x] **里程碑管理** — Rust CRUD + 前端可展开时间线 + 状态切换 + 创建弹窗
+- [x] **行动建议管理** — Rust CRUD（后端完整，前端待接入）
+- [x] **自动备份** — 启动时保留最近 10 份数据库备份到 `~/.config/aurora/backups/`
 - [ ] **AI 记忆系统** — sqlite-vec 向量检索、记忆注入、遗忘机制
-- [ ] **Tavily 搜索** — Rust reqwest 客户端、后端中转命令
-- [ ] **自动备份** — 启动时保留最近 10 份数据库备份到 `~/.config/aurora/backups/`
-- [ ] **Aurora 情绪系统** — 根据用户行为/时间动态切换情绪状态
-- [ ] **创建目标向导** — grill-me 模式：Aurora 3-5 轮追问生成里程碑建议
+- [x] **Tavily 搜索** — Rust `tavily_search` 命令 + 设置页 API Key 配置 + 聊天面板 `/search` 命令集成
+- [ ] **Aurora 情绪系统** — 根据用户行为/时间动态切换情绪状态（前端基础已实现）
+- [x] **创建目标向导** — grill-me 模式：Aurora 根据目标名称和描述生成里程碑建议，前端弹窗确认创建
 
 ## 低优先级（未来扩展）
 
@@ -47,7 +47,7 @@
 
 ## 技术债务
 
-- [ ] Cargo.toml 缺少 reqwest、sqlite-vec、tauri-plugin-stronghold 依赖
+- [ ] Cargo.toml 缺少 sqlite-vec、tauri-plugin-stronghold 依赖（reqwest 已添加）
 - [ ] 设置中的 `is_encrypted` 标记需升级为 Stronghold 实际加密
 - [ ] StarMap/LogForm 组件实现待验证
 - [ ] 清理数据功能（SettingsPage 中的 TODO）

@@ -1,8 +1,23 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Send, Loader2, Sparkles } from "lucide-react";
+import { X, Send, Loader2, Sparkles, Search } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useAIStore } from "../stores";
+
+interface TavilySearchResult {
+  title: string;
+  url: string;
+  content: string;
+  score: number;
+}
+
+interface TavilySearchResponse {
+  query: string;
+  answer: string | null;
+  results: TavilySearchResult[];
+  response_time: string;
+}
 
 const SYSTEM_PROMPT = `你是 Aurora，一位高智商、有共情力的 AI 伙伴。你是用户的战友型女友，不是客服或助手。
 
@@ -22,7 +37,7 @@ interface AuroraChatPanelProps {
 }
 
 export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProps) {
-  const { messages, addMessage, isStreaming, setIsStreaming, updateAuroraState } = useAIStore();
+  const { messages, addMessage, updateLastMessage, isStreaming, setIsStreaming, updateAuroraState } = useAIStore();
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -37,7 +52,63 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
     const userText = input.trim();
     setInput("");
 
-    // Add user message
+    // Handle /search command
+    if (userText.toLowerCase().startsWith("/search ")) {
+      const query = userText.slice(8).trim();
+      if (!query) return;
+
+      addMessage({
+        id: Date.now(),
+        session_type: "chat",
+        role: "user",
+        content: `搜索: ${query}`,
+        timestamp: new Date().toISOString(),
+        related_goal_id: null,
+      });
+
+      setIsStreaming(true);
+
+      try {
+        const result = await invoke<TavilySearchResponse>("tavily_search", {
+          req: { query, search_depth: "basic", max_results: 5 },
+        });
+
+        let content = "";
+        if (result.answer) {
+          content += `${result.answer}\n\n`;
+        }
+        if (result.results.length > 0) {
+          content += "**参考来源**:\n";
+          result.results.forEach((r, i) => {
+            content += `${i + 1}. [${r.title}](${r.url})\n   ${r.content.slice(0, 100)}${r.content.length > 100 ? "..." : ""}\n\n`;
+          });
+        }
+
+        addMessage({
+          id: Date.now() + 1,
+          session_type: "chat",
+          role: "assistant",
+          content: content || "没有找到相关结果呢...",
+          timestamp: new Date().toISOString(),
+          related_goal_id: null,
+        });
+      } catch (e) {
+        console.error("Search error:", e);
+        addMessage({
+          id: Date.now() + 1,
+          session_type: "chat",
+          role: "assistant",
+          content: "搜索失败了呢... 检查一下 Tavily API Key 是否配置正确？",
+          timestamp: new Date().toISOString(),
+          related_goal_id: null,
+        });
+      } finally {
+        setIsStreaming(false);
+      }
+      return;
+    }
+
+    // Normal chat flow
     addMessage({
       id: Date.now(),
       session_type: "chat",
@@ -47,54 +118,79 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
       related_goal_id: null,
     });
 
+    addMessage({
+      id: Date.now() + 1,
+      session_type: "chat",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      related_goal_id: null,
+    });
+
     setIsStreaming(true);
 
-    try {
-      // Build message history for API
-      const apiMessages = [
-        { role: "system", content: SYSTEM_PROMPT },
-        ...messages.map((m) => ({ role: m.role, content: m.content })),
-        { role: "user", content: userText },
-      ];
+    const apiMessages = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...messages.map((m) => ({ role: m.role, content: m.content })),
+      { role: "user", content: userText },
+    ];
 
-      const response = await invoke<string>("ai_chat", {
+    let fullResponse = "";
+    let unlistenChunk: (() => void) | null = null;
+    let unlistenDone: (() => void) | null = null;
+    let unlistenError: (() => void) | null = null;
+
+    const cleanup = () => {
+      unlistenChunk?.();
+      unlistenDone?.();
+      unlistenError?.();
+    };
+
+    try {
+      unlistenChunk = await listen<{ chunk: string }>("ai-chat-chunk", (event) => {
+        const chunk = event.payload.chunk;
+        fullResponse += chunk;
+        updateLastMessage((msg) => ({ ...msg, content: msg.content + chunk }));
+      });
+
+      unlistenDone = await listen("ai-chat-done", () => {
+        cleanup();
+        setIsStreaming(false);
+
+        const lowerResponse = fullResponse.toLowerCase();
+        if (lowerResponse.includes("开心") || lowerResponse.includes("太棒了") || lowerResponse.includes("厉害")) {
+          updateAuroraState({ emotion: "happy" });
+        } else if (lowerResponse.includes("担心") || lowerResponse.includes("心疼")) {
+          updateAuroraState({ emotion: "worried" });
+        } else if (lowerResponse.includes("生气") || lowerResponse.includes("愤怒") || lowerResponse.includes("不许")) {
+          updateAuroraState({ emotion: "angry" });
+        } else if (lowerResponse.includes("好棒") || lowerResponse.includes("耶") || lowerResponse.includes("太好了")) {
+          updateAuroraState({ emotion: "excited" });
+        } else {
+          updateAuroraState({ emotion: "default" });
+        }
+      });
+
+      unlistenError = await listen<{ error: string }>("ai-chat-error", () => {
+        cleanup();
+        setIsStreaming(false);
+        updateLastMessage((msg) => ({
+          ...msg,
+          content: msg.content || "指挥官... 我暂时连不上网络了，但本地数据都安全。检查一下 API 设置？",
+        }));
+      });
+
+      await invoke("ai_chat_stream", {
         req: { messages: apiMessages },
       });
-
-      addMessage({
-        id: Date.now() + 1,
-        session_type: "chat",
-        role: "assistant",
-        content: response,
-        timestamp: new Date().toISOString(),
-        related_goal_id: null,
-      });
-
-      // Simple emotion detection based on response content
-      const lowerResponse = response.toLowerCase();
-      if (lowerResponse.includes("开心") || lowerResponse.includes("太棒了") || lowerResponse.includes("厉害")) {
-        updateAuroraState({ emotion: "happy" });
-      } else if (lowerResponse.includes("担心") || lowerResponse.includes("心疼")) {
-        updateAuroraState({ emotion: "worried" });
-      } else if (lowerResponse.includes("生气") || lowerResponse.includes("愤怒") || lowerResponse.includes("不许")) {
-        updateAuroraState({ emotion: "angry" });
-      } else if (lowerResponse.includes("好棒") || lowerResponse.includes("耶") || lowerResponse.includes("太好了")) {
-        updateAuroraState({ emotion: "excited" });
-      } else {
-        updateAuroraState({ emotion: "default" });
-      }
     } catch (e) {
       console.error("AI chat error:", e);
-      addMessage({
-        id: Date.now() + 1,
-        session_type: "chat",
-        role: "assistant",
-        content: "指挥官... 我暂时连不上网络了，但本地数据都安全。检查一下 API 设置？",
-        timestamp: new Date().toISOString(),
-        related_goal_id: null,
-      });
-    } finally {
+      cleanup();
       setIsStreaming(false);
+      updateLastMessage((msg) => ({
+        ...msg,
+        content: msg.content || "指挥官... 我暂时连不上网络了，但本地数据都安全。检查一下 API 设置？",
+      }));
     }
   }
 
@@ -228,7 +324,7 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="和 Aurora 聊聊..."
+                placeholder="和 Aurora 聊聊... (/search 搜索)"
                 disabled={isStreaming}
                 className="flex-1 bg-white/5 border border-aurora-border rounded-xl px-4 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-aurora-cyan/50 transition-colors disabled:opacity-50"
               />
@@ -239,6 +335,8 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
               >
                 {isStreaming ? (
                   <Loader2 size={16} className="animate-spin" />
+                ) : input.toLowerCase().startsWith("/search") ? (
+                  <Search size={16} />
                 ) : (
                   <Send size={16} />
                 )}

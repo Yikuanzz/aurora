@@ -1,6 +1,7 @@
 mod ai;
 mod commands;
 mod db;
+mod tavily;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -28,6 +29,11 @@ pub fn run() {
             commands::export_data,
             commands::import_data,
             commands::ai_chat,
+            commands::ai_chat_stream,
+            commands::ai_list_models,
+            commands::ai_test_connection,
+            commands::ai_suggest_milestones,
+            commands::tavily_search,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

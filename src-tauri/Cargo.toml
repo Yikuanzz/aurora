@@ -26,6 +26,7 @@ rusqlite = { version = "0.33", features = ["bundled", "chrono"] }
 chrono = "0.4"
 dirs = "6"
 once_cell = "1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures-util = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 

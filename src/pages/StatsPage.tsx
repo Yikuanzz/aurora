@@ -103,7 +103,7 @@ function HeatMap({ data }: { data: DailyActivity[] }) {
         <h3 className="text-lg font-semibold text-slate-100">活动热力图</h3>
         <span className="text-xs text-slate-500 ml-auto">最近30天</span>
       </div>
-      <div className="flex gap-1.5">
+      <div className="flex gap-1.5 justify-center">
         {weekDays.map((day, idx) => (
           <div key={day} className="flex flex-col items-center gap-1.5">
             <span className="text-[10px] text-slate-600 w-8 text-center">{day}</span>
@@ -144,7 +144,7 @@ function GoalProgressList({ goals }: { goals: GoalActivity[] }) {
         <Target size={18} className="text-aurora-pink" />
         <h3 className="text-lg font-semibold text-slate-100">目标进度</h3>
       </div>
-      <div className="space-y-4 max-h-[320px] overflow-y-auto pr-1">
+      <div className="space-y-4 max-h-[320px] overflow-y-auto pr-1 scrollbar-hide">
         {goals.length === 0 ? (
           <div className="text-center text-slate-500 py-8">暂无目标数据</div>
         ) : (
@@ -275,7 +275,7 @@ function RecentLogs({ logs }: { logs: import("../types").DailyLog[] }) {
         <Activity size={18} className="text-aurora-purple" />
         <h3 className="text-lg font-semibold text-slate-100">最近记录</h3>
       </div>
-      <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+      <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1 scrollbar-hide">
         {logs.length === 0 ? (
           <div className="text-center text-slate-500 py-8">暂无记录</div>
         ) : (
@@ -366,41 +366,43 @@ export default function StatsPage() {
         <p className="text-slate-500 text-sm mt-1">追踪你的成长轨迹</p>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <SummaryCard
-          icon={Zap}
-          label="今日记录"
-          value={summary.today_log_count}
-          subtext={`涉及 ${summary.today_goal_count} 个目标`}
-          color="#00D9FF"
-          delay={0}
-        />
-        <SummaryCard
-          icon={Calendar}
-          label="本周累计"
-          value={summary.week_log_count}
-          subtext={`总量 ${Math.round(summary.week_total_value)}`}
-          color="#FFB800"
-          delay={0.05}
-        />
-        <SummaryCard
-          icon={Target}
-          label="活跃目标"
-          value={summary.active_goals}
-          subtext={`共 ${summary.total_goals} 个目标`}
-          color="#FF6B9D"
-          delay={0.1}
-        />
-        <SummaryCard
-          icon={CheckCircle2}
-          label="已完成"
-          value={summary.completed_goals}
-          subtext="继续努力"
-          color="#22C55E"
-          delay={0.15}
-        />
-      </div>
+      {/* Scrollable Content */}
+      <div className="flex-1 overflow-y-auto pb-4 scrollbar-hide">
+        {/* Summary Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <SummaryCard
+            icon={Zap}
+            label="今日记录"
+            value={summary.today_log_count}
+            subtext={`涉及 ${summary.today_goal_count} 个目标`}
+            color="#00D9FF"
+            delay={0}
+          />
+          <SummaryCard
+            icon={Calendar}
+            label="本周累计"
+            value={summary.week_log_count}
+            subtext={`总量 ${Math.round(summary.week_total_value)}`}
+            color="#FFB800"
+            delay={0.05}
+          />
+          <SummaryCard
+            icon={Target}
+            label="活跃目标"
+            value={summary.active_goals}
+            subtext={`共 ${summary.total_goals} 个目标`}
+            color="#FF6B9D"
+            delay={0.1}
+          />
+          <SummaryCard
+            icon={CheckCircle2}
+            label="已完成"
+            value={summary.completed_goals}
+            subtext="继续努力"
+            color="#22C55E"
+            delay={0.15}
+          />
+        </div>
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -409,11 +411,10 @@ export default function StatsPage() {
       </div>
 
       {/* Bottom Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <HeatMap data={daily_activity_last_30d} />
-        </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <HeatMap data={daily_activity_last_30d} />
         <RecentLogs logs={recent_logs} />
+      </div>
       </div>
     </div>
   );

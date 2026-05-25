@@ -2,12 +2,18 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Plus, Pencil, Trash2, Target, Calendar, Zap, LayoutGrid, Orbit, Hash,
-  ChevronDown, ChevronUp, Lock, CheckCircle2, Circle,
+  ChevronDown, ChevronUp, Lock, CheckCircle2, Circle, Sparkles, Wand2,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useGoalStore } from "../stores";
 import StarMap from "../components/StarMap";
 import type { Goal, DailyLog, Milestone } from "../types";
+
+interface SuggestedMilestone {
+  name: string;
+  description: string;
+  sequence_order: number;
+}
 
 const PRESET_COLORS = [
   "#00D9FF",
@@ -38,6 +44,12 @@ export default function GoalsPage() {
     color_theme: "#00D9FF",
     target_date: "",
   });
+  const [useAuroraAssist, setUseAuroraAssist] = useState(false);
+  const [suggestedMilestones, setSuggestedMilestones] = useState<SuggestedMilestone[]>([]);
+  const [showSuggestionModal, setShowSuggestionModal] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [createdGoalId, setCreatedGoalId] = useState<number | null>(null);
+  const [selectedSuggestionIndices, setSelectedSuggestionIndices] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     loadGoals();
@@ -92,6 +104,30 @@ export default function GoalsPage() {
           },
         });
         addGoal(created);
+
+        if (useAuroraAssist) {
+          setAiLoading(true);
+          setCreatedGoalId(created.id);
+          try {
+            const suggestions = await invoke<SuggestedMilestone[]>("ai_suggest_milestones", {
+              req: {
+                goal_name: formData.name,
+                goal_description: formData.description || null,
+              },
+            });
+            setSuggestedMilestones(suggestions);
+            setSelectedSuggestionIndices(new Set(suggestions.map((_, i) => i)));
+            setShowSuggestionModal(true);
+            closeForm();
+          } catch (e) {
+            console.error("Failed to get milestone suggestions:", e);
+            alert("Aurora 生成建议失败，但目标已创建。");
+            closeForm();
+          } finally {
+            setAiLoading(false);
+          }
+          return;
+        }
       }
       closeForm();
     } catch (e) {
@@ -129,6 +165,7 @@ export default function GoalsPage() {
   function closeForm() {
     setShowForm(false);
     setEditingGoal(null);
+    setUseAuroraAssist(false);
     setFormData({ name: "", description: "", color_theme: "#00D9FF", target_date: "" });
   }
 
@@ -161,6 +198,45 @@ export default function GoalsPage() {
     } catch (e) {
       console.error("Failed to create milestone:", e);
     }
+  }
+
+  async function handleConfirmMilestones() {
+    if (!createdGoalId) return;
+    const toCreate = suggestedMilestones.filter((_, i) => selectedSuggestionIndices.has(i));
+    if (toCreate.length === 0) {
+      setShowSuggestionModal(false);
+      return;
+    }
+    try {
+      for (const ms of toCreate) {
+        await invoke("db_create_milestone", {
+          req: {
+            goal_id: createdGoalId,
+            name: ms.name,
+            description: ms.description || null,
+            target_date: null,
+          },
+        });
+      }
+      setShowSuggestionModal(false);
+      setSuggestedMilestones([]);
+      setSelectedSuggestionIndices(new Set());
+      setCreatedGoalId(null);
+    } catch (e) {
+      console.error("Failed to create milestones:", e);
+    }
+  }
+
+  function toggleSuggestionIndex(index: number) {
+    setSelectedSuggestionIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
   }
 
   return (
@@ -353,6 +429,32 @@ export default function GoalsPage() {
                   </div>
                 </div>
 
+                {!editingGoal && (
+                  <label className="flex items-center gap-2 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={useAuroraAssist}
+                      onChange={(e) => setUseAuroraAssist(e.target.checked)}
+                      className="sr-only"
+                    />
+                    <div
+                      className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${
+                        useAuroraAssist
+                          ? "bg-aurora-pink/20 border-aurora-pink"
+                          : "border-aurora-border group-hover:border-aurora-pink/50"
+                      }`}
+                    >
+                      {useAuroraAssist && (
+                        <Sparkles size={12} className="text-aurora-pink" />
+                      )}
+                    </div>
+                    <span className="text-sm text-slate-400 group-hover:text-slate-300 flex items-center gap-1.5 transition-colors">
+                      <Wand2 size={14} className="text-aurora-pink" />
+                      Aurora 协助规划里程碑
+                    </span>
+                  </label>
+                )}
+
                 <div className="flex gap-3 pt-2">
                   <button
                     type="button"
@@ -363,9 +465,10 @@ export default function GoalsPage() {
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 py-2.5 rounded-xl bg-aurora-cyan/15 border border-aurora-cyan/30 text-aurora-cyan hover:bg-aurora-cyan/25 transition-colors font-medium"
+                    disabled={aiLoading}
+                    className="flex-1 py-2.5 rounded-xl bg-aurora-cyan/15 border border-aurora-cyan/30 text-aurora-cyan hover:bg-aurora-cyan/25 transition-colors font-medium disabled:opacity-50"
                   >
-                    {editingGoal ? "保存" : "创建"}
+                    {editingGoal ? "保存" : aiLoading ? "生成中..." : "创建"}
                   </button>
                 </div>
               </form>
@@ -453,6 +556,98 @@ export default function GoalsPage() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Aurora Milestone Suggestion Modal */}
+      <AnimatePresence>
+        {showSuggestionModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ backgroundColor: "rgba(10, 14, 26, 0.8)" }}
+            onClick={() => {
+              setShowSuggestionModal(false);
+              setSuggestedMilestones([]);
+              setSelectedSuggestionIndices(new Set());
+              setCreatedGoalId(null);
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 25 }}
+              className="glass-panel rounded-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="px-6 py-4 border-b border-aurora-border flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-aurora-pink/15 flex items-center justify-center">
+                  <Sparkles size={18} className="text-aurora-pink" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-100">Aurora 的规划建议</h3>
+                  <p className="text-xs text-slate-500">选择要创建的里程碑</p>
+                </div>
+              </div>
+
+              <div className="p-6 max-h-[60vh] overflow-y-auto">
+                {suggestedMilestones.length === 0 ? (
+                  <div className="text-center text-slate-500 py-4">没有生成建议，请重试。</div>
+                ) : (
+                  <div className="space-y-3">
+                    {suggestedMilestones.map((ms, i) => (
+                      <label
+                        key={i}
+                        className="flex items-start gap-3 p-3 rounded-xl bg-white/5 border border-aurora-border/50 cursor-pointer hover:border-aurora-pink/30 transition-colors"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedSuggestionIndices.has(i)}
+                          onChange={() => toggleSuggestionIndex(i)}
+                          className="mt-0.5 w-4 h-4 accent-aurora-pink"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-aurora-pink">
+                              步骤 {ms.sequence_order}
+                            </span>
+                          </div>
+                          <div className="text-sm font-medium text-slate-200 mt-0.5">{ms.name}</div>
+                          {ms.description && (
+                            <div className="text-xs text-slate-500 mt-1">{ms.description}</div>
+                          )}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="px-6 py-4 border-t border-aurora-border flex gap-3">
+                <button
+                  onClick={() => {
+                    setShowSuggestionModal(false);
+                    setSuggestedMilestones([]);
+                    setSelectedSuggestionIndices(new Set());
+                    setCreatedGoalId(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl border border-aurora-border text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-colors"
+                >
+                  跳过
+                </button>
+                <button
+                  onClick={handleConfirmMilestones}
+                  disabled={selectedSuggestionIndices.size === 0}
+                  className="flex-1 py-2.5 rounded-xl bg-aurora-pink/15 border border-aurora-pink/30 text-aurora-pink hover:bg-aurora-pink/25 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  确认创建 ({selectedSuggestionIndices.size})
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
