@@ -879,7 +879,7 @@ pub fn import_data(req: ImportDataRequest) -> Result<(), String> {
 // ===== AI Chat Commands =====
 
 use tauri::Emitter;
-use crate::ai::{chat_completion, chat_completion_stream, list_models, test_connection, ChatMessage, ApiProvider};
+use crate::ai::{chat_completion, chat_completion_stream, list_models, test_connection, generate_embedding, cosine_similarity, ChatMessage, ApiProvider};
 
 #[derive(Debug, Deserialize)]
 pub struct AIChatRequest {
@@ -910,7 +910,27 @@ pub async fn ai_chat(req: AIChatRequest) -> Result<String, String> {
         (api_key, base_url, model, ApiProvider::from_str(&provider_str))
     };
 
-    let content = chat_completion(api_key, base_url, model, provider, req.messages).await?;
+    // Inject relevant memories into messages
+    let mut messages = req.messages;
+    if let Some(last_user_msg) = messages.iter().rev().find(|m| m.role == "user") {
+        match build_memory_context(&last_user_msg.content).await {
+            Ok(memory_context) if !memory_context.is_empty() => {
+                // Find system message or prepend one
+                let sys_idx = messages.iter().position(|m| m.role == "system");
+                if let Some(idx) = sys_idx {
+                    messages[idx].content.push_str(&memory_context);
+                } else {
+                    messages.insert(0, ChatMessage {
+                        role: "system".to_string(),
+                        content: memory_context.trim_start().to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let content = chat_completion(api_key, base_url, model, provider, messages).await?;
     Ok(content)
 }
 
@@ -938,7 +958,26 @@ pub async fn ai_chat_stream(app: tauri::AppHandle, req: AIChatRequest) -> Result
         (api_key, base_url, model, ApiProvider::from_str(&provider_str))
     };
 
-    let result = chat_completion_stream(api_key, base_url, model, provider, req.messages, |chunk| {
+    // Inject relevant memories into messages
+    let mut messages = req.messages;
+    if let Some(last_user_msg) = messages.iter().rev().find(|m| m.role == "user") {
+        match build_memory_context(&last_user_msg.content).await {
+            Ok(memory_context) if !memory_context.is_empty() => {
+                let sys_idx = messages.iter().position(|m| m.role == "system");
+                if let Some(idx) = sys_idx {
+                    messages[idx].content.push_str(&memory_context);
+                } else {
+                    messages.insert(0, ChatMessage {
+                        role: "system".to_string(),
+                        content: memory_context.trim_start().to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let result = chat_completion_stream(api_key, base_url, model, provider, messages, |chunk| {
         app.emit("ai-chat-chunk", serde_json::json!({ "chunk": chunk }))
             .map_err(|e| e.to_string())
     }).await;
@@ -1097,6 +1136,275 @@ fn extract_json_array(text: &str) -> Result<String, String> {
         return Err("JSON 数组格式错误".to_string());
     }
     Ok(text[start..=end].to_string())
+}
+
+// ===== Memory Commands =====
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AIMemory {
+    pub id: i64,
+    pub memory_type: String,
+    pub content: String,
+    pub embedding: Option<String>,
+    pub importance_score: f64,
+    pub created_at: String,
+    pub last_accessed_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateMemoryRequest {
+    pub memory_type: String,
+    pub content: String,
+    pub importance_score: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchMemoriesRequest {
+    pub query: String,
+    pub limit: Option<i64>,
+}
+
+#[command]
+pub async fn db_add_memory(req: CreateMemoryRequest) -> Result<AIMemory, String> {
+    // Step 1: Get API config and generate embedding (lock released before await)
+    let embedding = {
+        let (api_key, base_url) = {
+            let conn = DB.lock().map_err(|e| e.to_string())?;
+            let api_key = conn
+                .query_row("SELECT value FROM app_settings WHERE key = 'api_key'", [], |row| row.get::<_, String>(0))
+                .ok();
+            let base_url = conn
+                .query_row("SELECT value FROM app_settings WHERE key = 'base_url'", [], |row| row.get::<_, String>(0))
+                .ok();
+            (api_key, base_url)
+        }; // lock released here
+
+        if let (Some(api_key), Some(base_url)) = (api_key, base_url) {
+            match generate_embedding(api_key, base_url, req.content.clone()).await {
+                Ok(vec) => {
+                    let json = serde_json::to_string(&vec).unwrap_or_default();
+                    if !json.is_empty() && json != "[]" {
+                        Some(json)
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        }
+    };
+
+    // Step 2: Insert into DB
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let importance = req.importance_score.unwrap_or(0.5);
+
+    conn.execute(
+        "INSERT INTO ai_memories (memory_type, content, embedding, importance_score) VALUES (?1, ?2, ?3, ?4)",
+        params![req.memory_type, req.content, embedding.as_ref(), importance],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let id = conn.last_insert_rowid();
+    let now = chrono::Local::now().to_rfc3339();
+
+    Ok(AIMemory {
+        id,
+        memory_type: req.memory_type,
+        content: req.content,
+        embedding,
+        importance_score: importance,
+        created_at: now.clone(),
+        last_accessed_at: now,
+    })
+}
+
+#[command]
+pub fn db_get_memories() -> Result<Vec<AIMemory>, String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, memory_type, content, embedding, importance_score, created_at, last_accessed_at FROM ai_memories ORDER BY last_accessed_at DESC")
+        .map_err(|e| e.to_string())?;
+    let memories = stmt
+        .query_map([], |row| {
+            Ok(AIMemory {
+                id: row.get(0)?,
+                memory_type: row.get(1)?,
+                content: row.get(2)?,
+                embedding: row.get(3)?,
+                importance_score: row.get(4)?,
+                created_at: row.get(5)?,
+                last_accessed_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(memories)
+}
+
+#[command]
+pub async fn db_search_memories(req: SearchMemoriesRequest) -> Result<Vec<AIMemory>, String> {
+    let limit = req.limit.unwrap_or(5);
+
+    // Step 1: Generate query embedding if possible (lock released before await)
+    let query_vec = {
+        let (api_key, base_url) = {
+            let conn = DB.lock().map_err(|e| e.to_string())?;
+            let api_key = conn
+                .query_row("SELECT value FROM app_settings WHERE key = 'api_key'", [], |row| row.get::<_, String>(0))
+                .ok();
+            let base_url = conn
+                .query_row("SELECT value FROM app_settings WHERE key = 'base_url'", [], |row| row.get::<_, String>(0))
+                .ok();
+            (api_key, base_url)
+        }; // lock released
+
+        if let (Some(api_key), Some(base_url)) = (api_key, base_url) {
+            match generate_embedding(api_key, base_url, req.query.clone()).await {
+                Ok(vec) => Some(vec),
+                Err(_) => None,
+            }
+        } else {
+            None
+        }
+    };
+
+    // Step 2: Vector search with embedding (sync block)
+    if let Some(query_vec) = query_vec {
+        let top_ids = {
+            let conn = DB.lock().map_err(|e| e.to_string())?;
+            let mut stmt = conn
+                .prepare("SELECT id, embedding FROM ai_memories WHERE embedding IS NOT NULL")
+                .map_err(|e| e.to_string())?;
+            let similarities: Vec<(i64, f32)> = stmt
+                .query_map([], |row| {
+                    let id: i64 = row.get(0)?;
+                    let embedding_json: String = row.get(1)?;
+                    let memory_vec: Vec<f32> = serde_json::from_str(&embedding_json).unwrap_or_default();
+                    let similarity = cosine_similarity(&query_vec, &memory_vec);
+                    Ok((id, similarity))
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+
+            let mut sorted = similarities;
+            sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            sorted.into_iter().take(limit as usize).map(|(id, _)| id).collect::<Vec<i64>>()
+        }; // lock released
+
+        if !top_ids.is_empty() {
+            let mut results = Vec::new();
+            for id in top_ids {
+                let conn = DB.lock().map_err(|e| e.to_string())?;
+                conn.execute(
+                    "UPDATE ai_memories SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    [id],
+                ).map_err(|e| e.to_string())?;
+                let mut stmt = conn
+                    .prepare("SELECT id, memory_type, content, embedding, importance_score, created_at, last_accessed_at FROM ai_memories WHERE id = ?")
+                    .map_err(|e| e.to_string())?;
+                let memory = stmt
+                    .query_row([id], |row| {
+                        Ok(AIMemory {
+                            id: row.get(0)?,
+                            memory_type: row.get(1)?,
+                            content: row.get(2)?,
+                            embedding: None, // strip embedding
+                            importance_score: row.get(4)?,
+                            created_at: row.get(5)?,
+                            last_accessed_at: row.get(6)?,
+                        })
+                    })
+                    .map_err(|e| e.to_string())?;
+                results.push(memory);
+            }
+            return Ok(results);
+        }
+    }
+
+    // Step 3: Fallback to keyword search
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let query_pattern = format!("%{}%", req.query);
+    let mut stmt = conn
+        .prepare("SELECT id, memory_type, content, embedding, importance_score, created_at, last_accessed_at FROM ai_memories WHERE content LIKE ?1 ORDER BY importance_score DESC, last_accessed_at DESC LIMIT ?2")
+        .map_err(|e| e.to_string())?;
+    let memories = stmt
+        .query_map(params![query_pattern, limit], |row| {
+            Ok(AIMemory {
+                id: row.get(0)?,
+                memory_type: row.get(1)?,
+                content: row.get(2)?,
+                embedding: row.get(3)?,
+                importance_score: row.get(4)?,
+                created_at: row.get(5)?,
+                last_accessed_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let mut results = Vec::new();
+    for mut m in memories {
+        conn.execute(
+            "UPDATE ai_memories SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [m.id],
+        ).map_err(|e| e.to_string())?;
+        m.embedding = None;
+        results.push(m);
+    }
+
+    Ok(results)
+}
+
+#[command]
+pub fn db_delete_memory(id: i64) -> Result<(), String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM ai_memories WHERE id = ?", [id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[command]
+pub fn db_forget_old_memories() -> Result<i64, String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+
+    // Delete memories that are:
+    // - Low importance (< 0.3)
+    // - Not accessed in the last 30 days
+    let cutoff = (chrono::Local::now() - chrono::Duration::days(30))
+        .format("%Y-%m-%dT%H:%M:%S")
+        .to_string();
+
+    let deleted = conn.execute(
+        "DELETE FROM ai_memories WHERE importance_score < 0.3 AND last_accessed_at < ?",
+        [&cutoff],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(deleted as i64)
+}
+
+// Helper: retrieve relevant memories and format as context
+async fn build_memory_context(query: &str) -> Result<String, String> {
+    let memories = db_search_memories(SearchMemoriesRequest {
+        query: query.to_string(),
+        limit: Some(5),
+    }).await?;
+
+    if memories.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut context = "\n\n[相关记忆]\n".to_string();
+    for m in memories {
+        context.push_str(&format!("- [{}] {}\n", m.memory_type, m.content));
+    }
+
+    Ok(context)
 }
 
 // ===== Tavily Search Commands =====

@@ -34,6 +34,11 @@ pub fn run() {
             commands::ai_test_connection,
             commands::ai_suggest_milestones,
             commands::tavily_search,
+            commands::db_add_memory,
+            commands::db_get_memories,
+            commands::db_search_memories,
+            commands::db_delete_memory,
+            commands::db_forget_old_memories,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

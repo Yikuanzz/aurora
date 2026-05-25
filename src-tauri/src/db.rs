@@ -131,6 +131,7 @@ fn init_tables(conn: &Connection) -> SqlResult<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             memory_type TEXT DEFAULT 'fact',
             content TEXT NOT NULL,
+            embedding TEXT,
             importance_score REAL DEFAULT 0.5,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

@@ -639,3 +639,84 @@ fn build_anthropic_chat_url(base_url: &str) -> String {
         format!("{}/v1/messages", base_url)
     }
 }
+
+// ===== Embedding Generation =====
+
+#[derive(Debug, Deserialize)]
+struct EmbeddingResponse {
+    data: Vec<EmbeddingData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddingData {
+    embedding: Vec<f32>,
+}
+
+pub async fn generate_embedding(
+    api_key: String,
+    base_url: String,
+    text: String,
+) -> Result<Vec<f32>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = if base_url.ends_with("/v1") {
+        format!("{}/embeddings", base_url)
+    } else if base_url.ends_with('/') {
+        format!("{}v1/embeddings", base_url)
+    } else {
+        format!("{}/v1/embeddings", base_url)
+    };
+
+    let body = json!({
+        "model": "text-embedding-3-small",
+        "input": text,
+    });
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("嵌入请求失败: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "无法读取错误信息".to_string());
+        return Err(format!("嵌入 API 错误 ({}): {}", status, text));
+    }
+
+    let data: EmbeddingResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("解析嵌入响应失败: {}", e))?;
+
+    data.data
+        .first()
+        .map(|d| d.embedding.clone())
+        .ok_or_else(|| "嵌入响应为空".to_string())
+}
+
+// Cosine similarity between two vectors
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.is_empty() || b.is_empty() || a.len() != b.len() {
+        return 0.0;
+    }
+
+    let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+
+    dot_product / (norm_a * norm_b)
+}
