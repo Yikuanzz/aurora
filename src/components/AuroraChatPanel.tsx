@@ -115,8 +115,12 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
       return;
     }
 
-    // Analyze emotion before sending
-    analyzeEmotion(userText);
+    // Analyze emotion before sending (non-blocking but awaited for ordering)
+    try {
+      await analyzeEmotion(userText);
+    } catch {
+      // Continue even if emotion analysis fails
+    }
 
     // Normal chat flow
     addMessage({
@@ -163,11 +167,15 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
         updateLastMessage((msg) => ({ ...msg, content: msg.content + chunk }));
       });
 
-      unlistenDone = await listen("ai-chat-done", () => {
+      unlistenDone = await listen("ai-chat-done", async () => {
         cleanup();
         setIsStreaming(false);
         // Record interaction and update state from backend
-        recordInteraction();
+        try {
+          await recordInteraction();
+        } catch {
+          // Ignore errors
+        }
       });
 
       unlistenError = await listen<{ error: string }>("ai-chat-error", () => {
