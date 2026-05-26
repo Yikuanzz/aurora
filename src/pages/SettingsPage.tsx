@@ -59,11 +59,15 @@ const ANTHROPIC_DEFAULT_MODELS = [
   "claude-3-opus-20240229",
 ];
 
-export default function SettingsPage() {
+interface SettingsPageProps {
+  onDirtyChange?: (dirty: boolean) => void;
+}
+
+export default function SettingsPage({ onDirtyChange }: SettingsPageProps) {
   const [settings, setSettings] = useState<SettingsData>(DEFAULT_SETTINGS);
+  const [initialSettings, setInitialSettings] = useState<SettingsData>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
@@ -74,9 +78,27 @@ export default function SettingsPage() {
   const modelTriggerRef = useRef<HTMLButtonElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  // Toast state
+  const [toast, setToast] = useState<{ show: boolean; type: "success" | "error"; text: string } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function showToast(type: "success" | "error", text: string) {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ show: true, type, text });
+    toastTimerRef.current = setTimeout(() => {
+      setToast((prev) => (prev ? { ...prev, show: false } : null));
+    }, 3000);
+  }
+
   useEffect(() => {
     loadSettings();
   }, []);
+
+  // Detect dirty state and notify parent
+  useEffect(() => {
+    const isDirty = JSON.stringify(settings) !== JSON.stringify(initialSettings);
+    onDirtyChange?.(isDirty);
+  }, [settings, initialSettings, onDirtyChange]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -123,7 +145,7 @@ export default function SettingsPage() {
       const sound =
         (await invoke<string | null>("settings_get", { key: "sound_enabled" })) === "true";
 
-      setSettings({
+      const loaded = {
         api_key: apiKey,
         base_url: baseUrl,
         model,
@@ -132,7 +154,9 @@ export default function SettingsPage() {
         theme,
         animations_enabled: animations,
         sound_enabled: sound,
-      });
+      };
+      setSettings(loaded);
+      setInitialSettings(loaded);
     } catch (e) {
       console.error("Failed to load settings:", e);
     } finally {
@@ -142,11 +166,10 @@ export default function SettingsPage() {
 
   async function fetchModels() {
     if (!settings.api_key.trim()) {
-      setMessage({ type: "error", text: "请先填写 API Key" });
+      showToast("error", "请先填写 API Key");
       return;
     }
     setFetchingModels(true);
-    setMessage(null);
     try {
       // 先保存当前设置，确保后端能读取到
       await invoke("settings_set", {
@@ -167,10 +190,10 @@ export default function SettingsPage() {
 
       const list = await invoke<string[]>("ai_list_models");
       setModels(list);
-      setMessage({ type: "success", text: `获取到 ${list.length} 个模型` });
+      showToast("success", `获取到 ${list.length} 个模型`);
     } catch (e) {
       console.error("Failed to fetch models:", e);
-      setMessage({ type: "error", text: String(e) });
+      showToast("error", String(e));
     } finally {
       setFetchingModels(false);
     }
@@ -178,11 +201,10 @@ export default function SettingsPage() {
 
   async function testConnection() {
     if (!settings.api_key.trim()) {
-      setMessage({ type: "error", text: "请先填写 API Key" });
+      showToast("error", "请先填写 API Key");
       return;
     }
     setTestingConnection(true);
-    setMessage(null);
     try {
       // 先保存当前设置
       await invoke("settings_set", {
@@ -207,10 +229,10 @@ export default function SettingsPage() {
       });
 
       const response = await invoke<string>("ai_test_connection");
-      setMessage({ type: "success", text: `连接成功！响应: ${response.slice(0, 20)}...` });
+      showToast("success", `连接成功！响应: ${response.slice(0, 20)}...`);
     } catch (e) {
       console.error("Connection test failed:", e);
-      setMessage({ type: "error", text: String(e) });
+      showToast("error", String(e));
     } finally {
       setTestingConnection(false);
     }
@@ -218,7 +240,6 @@ export default function SettingsPage() {
 
   async function saveSettings() {
     setSaving(true);
-    setMessage(null);
     try {
       await invoke("settings_set", {
         key: "api_key",
@@ -260,10 +281,11 @@ export default function SettingsPage() {
         value: String(settings.sound_enabled),
         encrypt: false,
       });
-      setMessage({ type: "success", text: "设置已保存" });
+      showToast("success", "设置已保存");
+      setInitialSettings({ ...settings });
     } catch (e) {
       console.error("Failed to save settings:", e);
-      setMessage({ type: "error", text: "保存失败" });
+      showToast("error", "保存失败");
     } finally {
       setSaving(false);
     }
@@ -279,10 +301,10 @@ export default function SettingsPage() {
       a.download = `aurora-backup-${new Date().toISOString().split("T")[0]}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      setMessage({ type: "success", text: "数据已导出" });
+      showToast("success", "数据已导出");
     } catch (e) {
       console.error("Export failed:", e);
-      setMessage({ type: "error", text: "导出失败" });
+      showToast("error", "导出失败");
     }
   }
 
@@ -296,10 +318,10 @@ export default function SettingsPage() {
       try {
         const text = await file.text();
         await invoke("import_data", { req: { json: text } });
-        setMessage({ type: "success", text: "数据已导入，请刷新页面" });
+        showToast("success", "数据已导入，请刷新页面");
       } catch (e) {
         console.error("Import failed:", e);
-        setMessage({ type: "error", text: "导入失败，请检查文件格式" });
+        showToast("error", "导入失败，请检查文件格式");
       }
     };
     input.click();
@@ -350,13 +372,48 @@ export default function SettingsPage() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
+      {/* Toast - rendered via portal at top-right */}
+      {createPortal(
+        <div className="fixed top-4 right-4 z-[200] flex flex-col gap-2 pointer-events-none">
+          {toast?.show && (
+            <motion.div
+              initial={{ opacity: 0, y: -20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -20, scale: 0.95 }}
+              className={`pointer-events-auto flex items-center gap-2 px-4 py-2.5 rounded-xl glass-panel border ${
+                toast.type === "success"
+                  ? "border-green-500/30 text-green-400"
+                  : "border-aurora-red/30 text-aurora-red"
+              }`}
+            >
+              {toast.type === "success" ? (
+                <CheckCircle2 size={16} />
+              ) : (
+                <AlertTriangle size={16} />
+              )}
+              <span className="text-sm">{toast.text}</span>
+            </motion.div>
+          )}
+        </div>,
+        document.body
+      )}
+
       {/* Header */}
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
-          <Settings className="text-aurora-cyan" size={28} />
-          系统设置
-        </h2>
-        <p className="text-slate-500 text-sm mt-1">配置 Aurora 的行为与外观</p>
+      <div className="relative z-10 mb-6 flex items-start justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
+            <Settings className="text-aurora-cyan" size={28} />
+            系统设置
+          </h2>
+          <p className="text-slate-500 text-sm mt-1">配置 Aurora 的行为与外观</p>
+        </div>
+        <button
+          onClick={saveSettings}
+          disabled={saving}
+          className="px-5 py-2 rounded-xl bg-aurora-cyan/15 border border-aurora-cyan/30 text-aurora-cyan hover:bg-aurora-cyan/30 hover:border-aurora-cyan/50 hover:shadow-[0_0_16px_rgba(0,217,255,0.15)] active:scale-[0.98] transition-all font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {saving ? "保存中..." : "保存设置"}
+        </button>
       </div>
 
       {/* Content */}
@@ -730,36 +787,6 @@ export default function SettingsPage() {
         </motion.div>
       </div>
 
-      {/* Save Button */}
-      <div className="mt-4 pt-4 border-t border-aurora-border flex items-center gap-4">
-        {message && (
-          <motion.div
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            className={`flex items-center gap-1.5 text-sm ${
-              message.type === "success" ? "text-green-400" : "text-aurora-red"
-            }`}
-          >
-            {message.type === "success" ? (
-              <CheckCircle2 size={14} />
-            ) : (
-              <AlertTriangle size={14} />
-            )}
-            {message.text}
-          </motion.div>
-        )}
-        <div className="flex-1" />
-        <motion.button
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
-          onClick={saveSettings}
-          disabled={saving}
-          className="px-6 py-2.5 rounded-xl bg-aurora-cyan/15 border border-aurora-cyan/30 text-aurora-cyan hover:bg-aurora-cyan/25 transition-colors font-medium disabled:opacity-50"
-        >
-          {saving ? "保存中..." : "保存设置"}
-        </motion.button>
-      </div>
-
       {/* Confirm Clear Modal */}
       {showConfirmClear && (
         <motion.div
@@ -793,7 +820,7 @@ export default function SettingsPage() {
                 onClick={() => {
                   setShowConfirmClear(false);
                   // TODO: implement clear all
-                  setMessage({ type: "success", text: "数据已清空" });
+                  showToast("success", "数据已清空");
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-aurora-red/15 border border-aurora-red/30 text-aurora-red hover:bg-aurora-red/25 transition-colors font-medium"
               >

@@ -7,6 +7,7 @@ import {
   Settings,
   PenLine,
   Minus,
+  AlertTriangle,
 } from "lucide-react";
 import HomePage from "./pages/HomePage";
 import GoalsPage from "./pages/GoalsPage";
@@ -30,6 +31,32 @@ function App() {
   const [auroraPanelOpen, setAuroraPanelOpen] = useState(false);
   const [logFormOpen, setLogFormOpen] = useState(false);
   const [dockVisible, setDockVisible] = useState(true);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [pendingView, setPendingView] = useState<View | null>(null);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+
+  function handleNavClick(view: View) {
+    if (currentView === "settings" && settingsDirty && view !== "settings") {
+      setPendingView(view);
+      setShowLeaveConfirm(true);
+      return;
+    }
+    setCurrentView(view);
+  }
+
+  function confirmLeave() {
+    setShowLeaveConfirm(false);
+    setSettingsDirty(false);
+    if (pendingView) {
+      setCurrentView(pendingView);
+      setPendingView(null);
+    }
+  }
+
+  function cancelLeave() {
+    setShowLeaveConfirm(false);
+    setPendingView(null);
+  }
 
   return (
     <div className="flex h-screen w-screen bg-aurora-bg text-slate-200 overflow-hidden">
@@ -46,7 +73,7 @@ function App() {
           return (
             <button
               key={item.id}
-              onClick={() => setCurrentView(item.id)}
+              onClick={() => handleNavClick(item.id)}
               className={`relative w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300 group ${
                 active
                   ? "bg-aurora-cyan/15 text-aurora-cyan shadow-[0_0_12px_rgba(0,217,255,0.15)]"
@@ -80,13 +107,15 @@ function App() {
           >
             {currentView === "home" && (
               <HomePage
-                onNavigate={(view) => setCurrentView(view)}
+                onNavigate={(view) => handleNavClick(view)}
                 onOpenLogForm={() => setLogFormOpen(true)}
               />
             )}
             {currentView === "goals" && <GoalsPage />}
             {currentView === "stats" && <StatsPage />}
-            {currentView === "settings" && <SettingsPage />}
+            {currentView === "settings" && (
+              <SettingsPage onDirtyChange={setSettingsDirty} />
+            )}
           </motion.div>
         </AnimatePresence>
 
@@ -193,6 +222,50 @@ function App() {
 
       {/* Log Form Modal */}
       <LogForm isOpen={logFormOpen} onClose={() => setLogFormOpen(false)} />
+
+      {/* Leave Settings Confirmation Dialog */}
+      <AnimatePresence>
+        {showLeaveConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[150] flex items-center justify-center p-4"
+            style={{ backgroundColor: "rgba(10, 14, 26, 0.7)" }}
+            onClick={cancelLeave}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="glass-panel rounded-2xl w-full max-w-sm p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <AlertTriangle size={24} className="text-aurora-amber" />
+                <h3 className="text-lg font-semibold text-slate-100">未保存的更改</h3>
+              </div>
+              <p className="text-sm text-slate-400 mb-6">
+                设置页面有未保存的更改，离开后将丢失。是否继续离开？
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={cancelLeave}
+                  className="flex-1 py-2.5 rounded-xl border border-aurora-border text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-colors"
+                >
+                  留在当前页面
+                </button>
+                <button
+                  onClick={confirmLeave}
+                  className="flex-1 py-2.5 rounded-xl bg-aurora-amber/15 border border-aurora-amber/30 text-aurora-amber hover:bg-aurora-amber/25 transition-colors font-medium"
+                >
+                  离开并放弃
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
