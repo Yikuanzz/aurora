@@ -39,6 +39,9 @@ pub fn run() {
             commands::db_search_memories,
             commands::db_delete_memory,
             commands::db_forget_old_memories,
+            commands::get_aurora_state,
+            commands::analyze_and_update_emotion,
+            commands::record_interaction,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

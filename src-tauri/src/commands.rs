@@ -1,4 +1,5 @@
 use crate::db::DB;
+use chrono::Timelike;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::command;
@@ -930,6 +931,23 @@ pub async fn ai_chat(req: AIChatRequest) -> Result<String, String> {
         }
     }
 
+    // Inject Aurora emotion state
+    match load_aurora_state() {
+        Ok(state) => {
+            let emotion_context = build_emotion_context(&state);
+            let sys_idx = messages.iter().position(|m| m.role == "system");
+            if let Some(idx) = sys_idx {
+                messages[idx].content.push_str(&emotion_context);
+            } else {
+                messages.insert(0, ChatMessage {
+                    role: "system".to_string(),
+                    content: emotion_context.trim_start().to_string(),
+                });
+            }
+        }
+        _ => {}
+    }
+
     let content = chat_completion(api_key, base_url, model, provider, messages).await?;
     Ok(content)
 }
@@ -975,6 +993,23 @@ pub async fn ai_chat_stream(app: tauri::AppHandle, req: AIChatRequest) -> Result
             }
             _ => {}
         }
+    }
+
+    // Inject Aurora emotion state
+    match load_aurora_state() {
+        Ok(state) => {
+            let emotion_context = build_emotion_context(&state);
+            let sys_idx = messages.iter().position(|m| m.role == "system");
+            if let Some(idx) = sys_idx {
+                messages[idx].content.push_str(&emotion_context);
+            } else {
+                messages.insert(0, ChatMessage {
+                    role: "system".to_string(),
+                    content: emotion_context.trim_start().to_string(),
+                });
+            }
+        }
+        _ => {}
     }
 
     let result = chat_completion_stream(api_key, base_url, model, provider, messages, |chunk| {
@@ -1405,6 +1440,303 @@ async fn build_memory_context(query: &str) -> Result<String, String> {
     }
 
     Ok(context)
+}
+
+// ===== Aurora Emotion System =====
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AuroraStateData {
+    pub emotion: String,
+    pub relationship_level: String,
+    pub user_status: String,
+    pub last_conversation_focus: String,
+    pub affection_points: i32,
+    pub interaction_count: i32,
+    pub streak_days: i32,
+    pub last_interaction_date: String,
+}
+
+impl Default for AuroraStateData {
+    fn default() -> Self {
+        Self {
+            emotion: "default".to_string(),
+            relationship_level: "陌生".to_string(),
+            user_status: String::new(),
+            last_conversation_focus: String::new(),
+            affection_points: 0,
+            interaction_count: 0,
+            streak_days: 0,
+            last_interaction_date: String::new(),
+        }
+    }
+}
+
+fn load_aurora_state() -> Result<AuroraStateData, String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let result: Result<String, _> = conn.query_row(
+        "SELECT value FROM app_settings WHERE key = 'aurora_state'",
+        [],
+        |row| row.get(0),
+    );
+    match result {
+        Ok(json) => serde_json::from_str(&json).map_err(|e| e.to_string()),
+        Err(_) => Ok(AuroraStateData::default()),
+    }
+}
+
+fn save_aurora_state(state: &AuroraStateData) -> Result<(), String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(state).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('aurora_state', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [&json],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn calculate_relationship_level(affection: i32) -> String {
+    match affection {
+        0..=20 => "陌生",
+        21..=50 => "熟悉",
+        51..=80 => "亲密",
+        _ => "挚友",
+    }
+    .to_string()
+}
+
+fn analyze_user_input(input: &str) -> (String, i32, String) {
+    let lower = input.to_lowercase();
+    let mut emotion = "default";
+    let mut affection_delta = 1; // base interaction
+    let mut user_status = String::new();
+
+    // Positive emotions
+    if lower.contains("开心") || lower.contains("高兴") || lower.contains("棒")
+        || lower.contains("完成") || lower.contains("达成") || lower.contains("成功")
+    {
+        emotion = "happy";
+        affection_delta = 5;
+        user_status = "状态不错".to_string();
+    }
+
+    // Achievement
+    if lower.contains("里程碑") || lower.contains("突破") || lower.contains("胜利")
+        || lower.contains("终于") || lower.contains("做到了")
+    {
+        emotion = "excited";
+        affection_delta = 10;
+        user_status = "刚刚达成成就".to_string();
+    }
+
+    // Negative emotions
+    if lower.contains("累") || lower.contains("难过") || lower.contains("失败")
+        || lower.contains("想放弃") || lower.contains("不行")
+    {
+        emotion = "worried";
+        affection_delta = 3;
+        user_status = "有些疲惫".to_string();
+    }
+
+    // Anger / frustration
+    if lower.contains("生气") || lower.contains("烦") || lower.contains("讨厌")
+        || lower.contains("恨") || lower.contains("愤怒")
+    {
+        emotion = "angry";
+        affection_delta = 2;
+        user_status = "情绪不太好".to_string();
+    }
+
+    // Late night
+    let hour = chrono::Local::now().hour();
+    if (23..=23).contains(&hour) || (0..=4).contains(&hour) {
+        if emotion == "default" {
+            emotion = "worried";
+            affection_delta = affection_delta.max(1);
+        }
+        user_status = "深夜还在奋斗".to_string();
+    }
+
+    // Morning greeting
+    if (5..=9).contains(&hour) && emotion == "default" {
+        user_status = "新的一天开始".to_string();
+    }
+
+    (emotion.to_string(), affection_delta, user_status)
+}
+
+fn check_streak_and_inactivity() -> (i32, String) {
+    let conn = DB.lock().unwrap();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    // Check consecutive days with logs
+    let mut streak = 0;
+    for day_back in 0..30 {
+        let check_date = (chrono::Local::now() - chrono::Duration::days(day_back))
+            .format("%Y-%m-%d")
+            .to_string();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM daily_logs WHERE log_date = ?",
+                [&check_date],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if count > 0 {
+            streak += 1;
+        } else if day_back > 0 {
+            break;
+        }
+    }
+
+    // Check last log date
+    let last_log_result: Result<String, _> = conn.query_row(
+        "SELECT MAX(log_date) FROM daily_logs",
+        [],
+        |row| row.get(0),
+    );
+
+    let status = match last_log_result {
+        Ok(last_date) => {
+            if last_date < today {
+                let days_since = conn.query_row(
+                    "SELECT julianday(?) - julianday(?)",
+                    [&today, &last_date],
+                    |row| row.get::<_, f64>(0),
+                ).unwrap_or(0.0) as i32;
+
+                if days_since >= 7 {
+                    "已经一周没记录了".to_string()
+                } else if days_since >= 3 {
+                    "几天没记东西了".to_string()
+                } else if streak >= 3 {
+                    format!("连续打卡{}天", streak)
+                } else {
+                    String::new()
+                }
+            } else if streak >= 3 {
+                format!("连续打卡{}天", streak)
+            } else {
+                String::new()
+            }
+        }
+        Err(_) => {
+            if streak >= 3 {
+                format!("连续打卡{}天", streak)
+            } else {
+                String::new()
+            }
+        }
+    };
+
+    (streak, status)
+}
+
+fn build_emotion_context(state: &AuroraStateData) -> String {
+    let emotion_desc = match state.emotion.as_str() {
+        "happy" => "你现在感到开心，语气要轻快活泼",
+        "worried" => "你现在有些担心用户，语气要温柔关切",
+        "excited" => "你现在很兴奋，语气要热情洋溢",
+        "angry" => "你现在有点生气（克制的愤怒），语气要带点责备但充满关心",
+        "tender" => "你现在很温柔，语气要软糯宠溺",
+        _ => "你保持平常的元气状态",
+    };
+
+    let relationship_desc = match state.relationship_level.as_str() {
+        "陌生" => "你们还不太熟，保持礼貌但友善的距离",
+        "熟悉" => "你们已经比较熟悉了，可以用自然的语气",
+        "亲密" => "你们关系很亲密，可以用'指挥官'称呼用户，会撒娇",
+        "挚友" => "你们是挚友，深度共情，会毫不掩饰地心疼和开心",
+        _ => "",
+    };
+
+    let mut context = format!(
+        "\n\n[你的当前状态]\n{}\n亲密度等级：{}（{}）\n",
+        emotion_desc, state.relationship_level, relationship_desc
+    );
+
+    if !state.user_status.is_empty() {
+        context.push_str(&format!("用户当前状态：{}\n", state.user_status));
+    }
+
+    if state.affection_points > 0 {
+        context.push_str(&format!("当前亲密度：{} 点\n", state.affection_points));
+    }
+
+    context
+}
+
+#[command]
+pub fn get_aurora_state() -> Result<AuroraStateData, String> {
+    load_aurora_state()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnalyzeEmotionRequest {
+    pub user_input: String,
+    pub context: Option<String>, // "goal_completed", "milestone_done", "goal_abandoned", "log_added"
+}
+
+#[command]
+pub fn analyze_and_update_emotion(req: AnalyzeEmotionRequest) -> Result<AuroraStateData, String> {
+    let mut state = load_aurora_state()?;
+
+    // Analyze user input
+    let (input_emotion, input_affection, input_status) = analyze_user_input(&req.user_input);
+
+    // Context-based overrides
+    let (context_emotion, context_affection) = match req.context.as_deref() {
+        Some("goal_completed") => ("excited", 15),
+        Some("milestone_done") => ("excited", 10),
+        Some("goal_abandoned") => ("angry", 5),
+        Some("log_added") => ("happy", 3),
+        _ => (input_emotion.as_str(), input_affection),
+    };
+
+    // Apply context emotion if more specific
+    state.emotion = context_emotion.to_string();
+    state.affection_points = (state.affection_points + context_affection).min(100);
+    state.interaction_count += 1;
+
+    // Update relationship level
+    state.relationship_level = calculate_relationship_level(state.affection_points);
+
+    // Merge status (context status takes priority if not empty)
+    if !input_status.is_empty() {
+        state.user_status = input_status;
+    }
+
+    // Check streak
+    let (streak, streak_status) = check_streak_and_inactivity();
+    state.streak_days = streak;
+    if !streak_status.is_empty() && state.user_status.is_empty() {
+        state.user_status = streak_status;
+    }
+
+    // Update last interaction
+    state.last_interaction_date = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    save_aurora_state(&state)?;
+    Ok(state)
+}
+
+#[command]
+pub fn record_interaction() -> Result<AuroraStateData, String> {
+    let mut state = load_aurora_state()?;
+    state.interaction_count += 1;
+    state.affection_points = (state.affection_points + 1).min(100);
+    state.relationship_level = calculate_relationship_level(state.affection_points);
+    state.last_interaction_date = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    // Check streak for status update
+    let (streak, streak_status) = check_streak_and_inactivity();
+    state.streak_days = streak;
+    if !streak_status.is_empty() {
+        state.user_status = streak_status;
+    }
+
+    save_aurora_state(&state)?;
+    Ok(state)
 }
 
 // ===== Tavily Search Commands =====

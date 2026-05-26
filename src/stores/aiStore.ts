@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { invoke } from "@tauri-apps/api/core";
 import type { ConversationMessage, AIMemory, AuroraState } from "../types";
 
 interface AIState {
@@ -11,14 +12,21 @@ interface AIState {
   clearMessages: () => void;
   setMemories: (memories: AIMemory[]) => void;
   updateAuroraState: (partial: Partial<AuroraState>) => void;
+  loadAuroraState: () => Promise<void>;
+  analyzeEmotion: (input: string, context?: string) => Promise<void>;
+  recordInteraction: () => Promise<void>;
   setIsStreaming: (val: boolean) => void;
 }
 
 const defaultAuroraState: AuroraState = {
   emotion: "default",
-  user_status: "",
   relationship_level: "陌生",
+  user_status: "",
   last_conversation_focus: "",
+  affection_points: 0,
+  interaction_count: 0,
+  streak_days: 0,
+  last_interaction_date: "",
 };
 
 export const useAIStore = create<AIState>((set) => ({
@@ -42,5 +50,31 @@ export const useAIStore = create<AIState>((set) => ({
     set((state) => ({
       auroraState: { ...state.auroraState, ...partial },
     })),
+  loadAuroraState: async () => {
+    try {
+      const state = await invoke<AuroraState>("get_aurora_state");
+      set({ auroraState: state });
+    } catch (e) {
+      console.error("Failed to load Aurora state:", e);
+    }
+  },
+  analyzeEmotion: async (input, context) => {
+    try {
+      const state = await invoke<AuroraState>("analyze_and_update_emotion", {
+        req: { user_input: input, context },
+      });
+      set({ auroraState: state });
+    } catch (e) {
+      console.error("Failed to analyze emotion:", e);
+    }
+  },
+  recordInteraction: async () => {
+    try {
+      const state = await invoke<AuroraState>("record_interaction");
+      set({ auroraState: state });
+    } catch (e) {
+      console.error("Failed to record interaction:", e);
+    }
+  },
   setIsStreaming: (val) => set({ isStreaming: val }),
 }));

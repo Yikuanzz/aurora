@@ -68,10 +68,14 @@ export interface AIMemory {
 
 // Aurora dynamic state
 export interface AuroraState {
-  emotion: "default" | "happy" | "worried" | "excited" | "angry";
-  user_status: string;
+  emotion: "default" | "happy" | "worried" | "excited" | "angry" | "tender";
   relationship_level: string;
+  user_status: string;
   last_conversation_focus: string;
+  affection_points: number;
+  interaction_count: number;
+  streak_days: number;
+  last_interaction_date: string;
 }
 
 // Stats types

@@ -37,9 +37,16 @@ interface AuroraChatPanelProps {
 }
 
 export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProps) {
-  const { messages, addMessage, updateLastMessage, isStreaming, setIsStreaming, updateAuroraState } = useAIStore();
+  const { messages, addMessage, updateLastMessage, isStreaming, setIsStreaming, auroraState, loadAuroraState, analyzeEmotion, recordInteraction } = useAIStore();
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Load Aurora state when panel opens
+  useEffect(() => {
+    if (isOpen) {
+      loadAuroraState();
+    }
+  }, [isOpen, loadAuroraState]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -108,6 +115,9 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
       return;
     }
 
+    // Analyze emotion before sending
+    analyzeEmotion(userText);
+
     // Normal chat flow
     addMessage({
       id: Date.now(),
@@ -156,19 +166,8 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
       unlistenDone = await listen("ai-chat-done", () => {
         cleanup();
         setIsStreaming(false);
-
-        const lowerResponse = fullResponse.toLowerCase();
-        if (lowerResponse.includes("开心") || lowerResponse.includes("太棒了") || lowerResponse.includes("厉害")) {
-          updateAuroraState({ emotion: "happy" });
-        } else if (lowerResponse.includes("担心") || lowerResponse.includes("心疼")) {
-          updateAuroraState({ emotion: "worried" });
-        } else if (lowerResponse.includes("生气") || lowerResponse.includes("愤怒") || lowerResponse.includes("不许")) {
-          updateAuroraState({ emotion: "angry" });
-        } else if (lowerResponse.includes("好棒") || lowerResponse.includes("耶") || lowerResponse.includes("太好了")) {
-          updateAuroraState({ emotion: "excited" });
-        } else {
-          updateAuroraState({ emotion: "default" });
-        }
+        // Record interaction and update state from backend
+        recordInteraction();
       });
 
       unlistenError = await listen<{ error: string }>("ai-chat-error", () => {
@@ -207,6 +206,7 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
     worried: "#FFB800",
     excited: "#FF6B9D",
     angry: "#FF4444",
+    tender: "#C084FC",
   };
 
   const emotionLabels: Record<string, string> = {
@@ -215,9 +215,10 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
     worried: "担心",
     excited: "兴奋",
     angry: "生气",
+    tender: "温柔",
   };
 
-  const currentEmotion = useAIStore.getState().auroraState.emotion;
+  const currentEmotion = auroraState.emotion;
   const statusColor = emotionColors[currentEmotion] || "#00D9FF";
 
   return (
@@ -255,7 +256,12 @@ export default function AuroraChatPanel({ isOpen, onClose }: AuroraChatPanelProp
                     思考中...
                   </>
                 ) : (
-                  <>{emotionLabels[currentEmotion]}</>
+                  <>
+                    {emotionLabels[currentEmotion]}
+                    {auroraState.relationship_level !== "陌生" && (
+                      <span className="opacity-60">· {auroraState.relationship_level}</span>
+                    )}
+                  </>
                 )}
               </div>
             </div>
