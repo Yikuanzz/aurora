@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Save, Calendar, Hash, Clock, CheckCircle2, Smile, RotateCcw } from "lucide-react";
+import { X, Save, Calendar, Hash, Clock, CheckCircle2, Smile, RotateCcw, ChevronDown, Check } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useGoalStore, useLogStore } from "../stores";
 import type { DailyLog, Goal } from "../types";
@@ -20,6 +20,7 @@ export default function LogForm({ isOpen, onClose }: LogFormProps) {
   const { goals, updateGoal } = useGoalStore();
   const { addLog } = useLogStore();
   const [saving, setSaving] = useState(false);
+  const [goalDropdownOpen, setGoalDropdownOpen] = useState(false);
   const [formData, setFormData] = useState({
     goal_id: "",
     log_date: new Date().toISOString().split("T")[0],
@@ -29,6 +30,8 @@ export default function LogForm({ isOpen, onClose }: LogFormProps) {
     unit: "次",
     feeling_text: "",
   });
+
+  const selectedGoal = goals.find((g: Goal) => String(g.id) === formData.goal_id);
 
   function handleTypeChange(type: "count" | "time" | "boolean") {
     const selected = LOG_TYPES.find((t) => t.value === type);
@@ -61,7 +64,7 @@ export default function LogForm({ isOpen, onClose }: LogFormProps) {
       addLog(log);
 
       // Recalculate and update goal progress
-      const updatedGoal = await invoke<import("../types").Goal>("db_recalculate_progress", {
+      const updatedGoal = await invoke<Goal>("db_recalculate_progress", {
         goalId,
       });
       updateGoal(goalId, updatedGoal);
@@ -134,32 +137,75 @@ export default function LogForm({ isOpen, onClose }: LogFormProps) {
 
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               {/* Goal Selection */}
-              <div>
+              <div className="relative">
                 <label className="block text-sm text-slate-400 mb-1.5">目标 *</label>
-                <select
-                  value={formData.goal_id}
-                  onChange={(e) => setFormData({ ...formData, goal_id: e.target.value })}
-                  className="w-full bg-white/5 border border-aurora-border rounded-xl px-4 py-2.5 text-slate-200 focus:outline-none focus:border-aurora-cyan/50 transition-colors appearance-none"
-                  required
+                <button
+                  type="button"
+                  onClick={() => setGoalDropdownOpen(!goalDropdownOpen)}
+                  className={`w-full bg-white/5 border rounded-xl px-4 py-2.5 text-left text-sm focus:outline-none transition-colors flex items-center justify-between ${
+                    goalDropdownOpen
+                      ? "border-aurora-cyan/50"
+                      : "border-aurora-border hover:border-aurora-cyan/30"
+                  }`}
                 >
-                  <option value="" className="bg-aurora-bg">选择目标...</option>
-                  {goals.map((goal: Goal) => (
-                    <option key={goal.id} value={goal.id} className="bg-aurora-bg">
-                      {goal.name}
-                    </option>
-                  ))}
-                </select>
+                  <span className={selectedGoal ? "text-slate-200" : "text-slate-500"}>
+                    {selectedGoal ? selectedGoal.name : "选择目标..."}
+                  </span>
+                  <ChevronDown
+                    size={16}
+                    className={`text-slate-500 transition-transform ${goalDropdownOpen ? "rotate-180" : ""}`}
+                  />
+                </button>
+                <AnimatePresence>
+                  {goalDropdownOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute z-20 left-0 right-0 top-full mt-1 glass-panel rounded-xl border border-aurora-border overflow-hidden max-h-48 overflow-y-auto"
+                    >
+                      {goals.length === 0 ? (
+                        <div className="px-4 py-3 text-sm text-slate-500">暂无目标</div>
+                      ) : (
+                        goals.map((goal: Goal) => (
+                          <button
+                            key={goal.id}
+                            type="button"
+                            onClick={() => {
+                              setFormData({ ...formData, goal_id: String(goal.id) });
+                              setGoalDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-2.5 text-sm flex items-center justify-between transition-colors ${
+                              String(goal.id) === formData.goal_id
+                                ? "bg-aurora-cyan/10 text-aurora-cyan"
+                                : "text-slate-300 hover:bg-white/5"
+                            }`}
+                          >
+                            <span className="truncate">{goal.name}</span>
+                            {String(goal.id) === formData.goal_id && (
+                              <Check size={14} />
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               {/* Date */}
               <div>
                 <label className="block text-sm text-slate-400 mb-1.5">日期</label>
-                <input
-                  type="date"
-                  value={formData.log_date}
-                  onChange={(e) => setFormData({ ...formData, log_date: e.target.value })}
-                  className="w-full bg-white/5 border border-aurora-border rounded-xl px-4 py-2.5 text-slate-200 focus:outline-none focus:border-aurora-cyan/50 transition-colors"
-                />
+                <div className="relative">
+                  <Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="date"
+                    value={formData.log_date}
+                    onChange={(e) => setFormData({ ...formData, log_date: e.target.value })}
+                    className="w-full bg-white/5 border border-aurora-border rounded-xl pl-10 pr-4 py-2.5 text-slate-200 focus:outline-none focus:border-aurora-cyan/50 transition-colors"
+                  />
+                </div>
               </div>
 
               {/* Log Type */}

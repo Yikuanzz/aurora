@@ -72,3 +72,13 @@ body {
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+/* Date input dark theme consistency — keep native picker clickable but visually hidden */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  cursor: pointer;
+}
+
+input[type="date"] {
+  color-scheme: dark;
+}
