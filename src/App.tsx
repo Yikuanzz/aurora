@@ -34,6 +34,7 @@ function App() {
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [pendingView, setPendingView] = useState<View | null>(null);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [auroraIntent, setAuroraIntent] = useState<string | null>(null);
 
   function handleNavClick(view: View) {
     if (currentView === "settings" && settingsDirty && view !== "settings") {
@@ -56,6 +57,19 @@ function App() {
   function cancelLeave() {
     setShowLeaveConfirm(false);
     setPendingView(null);
+  }
+
+  function openAuroraPlanning(goalInfo?: { name: string; description: string; targetDate: string }) {
+    const intent = goalInfo
+      ? JSON.stringify({ type: "plan_goal", ...goalInfo })
+      : JSON.stringify({ type: "plan_goal" });
+    setAuroraIntent(intent);
+    setAuroraPanelOpen(true);
+  }
+
+  function closeAuroraPanel() {
+    setAuroraPanelOpen(false);
+    setAuroraIntent(null);
   }
 
   return (
@@ -111,7 +125,9 @@ function App() {
                 onOpenLogForm={() => setLogFormOpen(true)}
               />
             )}
-            {currentView === "goals" && <GoalsPage />}
+            {currentView === "goals" && (
+              <GoalsPage onPlanWithAurora={openAuroraPlanning} />
+            )}
             {currentView === "stats" && <StatsPage />}
             {currentView === "settings" && (
               <SettingsPage onDirtyChange={setSettingsDirty} />
@@ -217,7 +233,8 @@ function App() {
       {/* Aurora Chat Panel */}
       <AuroraChatPanel
         isOpen={auroraPanelOpen}
-        onClose={() => setAuroraPanelOpen(false)}
+        onClose={closeAuroraPanel}
+        initialIntent={auroraIntent}
       />
 
       {/* Log Form Modal */}
