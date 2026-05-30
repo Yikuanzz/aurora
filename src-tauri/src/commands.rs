@@ -156,23 +156,50 @@ pub fn db_delete_goal(id: i64) -> Result<(), String> {
 pub fn db_recalculate_progress(goal_id: i64) -> Result<Goal, String> {
     let conn = DB.lock().map_err(|e| e.to_string())?;
 
-    // Calculate total value from all logs for this goal
-    let total_value: f64 = conn
+    // Count milestones for this goal
+    let total_milestones: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(value), 0) FROM daily_logs WHERE goal_id = ?",
+            "SELECT COUNT(*) FROM milestones WHERE goal_id = ?",
             [goal_id],
             |row| row.get(0),
         )
-        .unwrap_or(0.0);
+        .unwrap_or(0);
 
-    // Simple heuristic: every 10 units = 1% progress, max 100%
-    let progress = ((total_value / 10.0) as i32).min(100).max(0);
+    let progress = if total_milestones > 0 {
+        // Milestone-based progress: completed / total * 100
+        let completed_milestones: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM milestones WHERE goal_id = ? AND status = 'completed'",
+                [goal_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        ((completed_milestones as f64 / total_milestones as f64) * 100.0) as i32
+    } else {
+        // Fallback: calculate from daily_logs value (every 10 units = 1%)
+        let total_value: f64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(value), 0) FROM daily_logs WHERE goal_id = ?",
+                [goal_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0.0);
+        ((total_value / 10.0) as i32).min(100).max(0)
+    };
 
     conn.execute(
         "UPDATE goals SET current_progress_pct = ? WHERE id = ?",
         params![progress, goal_id],
     )
     .map_err(|e| e.to_string())?;
+
+    // Auto-mark goal as completed when progress reaches 100%
+    if progress >= 100 {
+        let _ = conn.execute(
+            "UPDATE goals SET status = 'completed' WHERE id = ? AND status != 'completed'",
+            [goal_id],
+        );
+    }
 
     let mut stmt = conn
         .prepare("SELECT id, name, description, color_theme, created_at, target_date, status, current_progress_pct FROM goals WHERE id = ?")
@@ -1754,4 +1781,44 @@ pub async fn tavily_search(req: TavilySearchRequest) -> Result<TavilySearchRespo
 
     let result = tavily_search_api(api_key, req).await?;
     Ok(result)
+}
+
+// ===== Clear All Data =====
+
+#[command]
+pub fn db_clear_all() -> Result<(), String> {
+    let conn = DB.lock().map_err(|e| e.to_string())?;
+
+    // Delete all data tables (preserve schema)
+    conn.execute("DELETE FROM daily_logs", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM actions", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM milestones", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM goals", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM ai_conversations", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM ai_memories", [])
+        .map_err(|e| e.to_string())?;
+
+    // Reset Aurora state to default
+    let default_state = AuroraStateData {
+        emotion: "default".to_string(),
+        relationship_level: "陌生".to_string(),
+        user_status: "".to_string(),
+        last_conversation_focus: "".to_string(),
+        affection_points: 0,
+        interaction_count: 0,
+        streak_days: 0,
+        last_interaction_date: "".to_string(),
+    };
+    save_aurora_state(&default_state)?;
+
+    // Vacuum to reclaim space
+    conn.execute("VACUUM", [])
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }

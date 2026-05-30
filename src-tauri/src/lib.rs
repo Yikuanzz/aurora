@@ -42,6 +42,7 @@ pub fn run() {
             commands::get_aurora_state,
             commands::analyze_and_update_emotion,
             commands::record_interaction,
+            commands::db_clear_all,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

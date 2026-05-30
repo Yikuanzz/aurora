@@ -817,10 +817,16 @@ export default function SettingsPage({ onDirtyChange }: SettingsPageProps) {
                 取消
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   setShowConfirmClear(false);
-                  // TODO: implement clear all
-                  showToast("success", "数据已清空");
+                  try {
+                    await invoke("db_clear_all");
+                    showToast("success", "数据已清空，请刷新页面");
+                    await loadSettings();
+                  } catch (e) {
+                    console.error("Clear all failed:", e);
+                    showToast("error", "清空失败");
+                  }
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-aurora-red/15 border border-aurora-red/30 text-aurora-red hover:bg-aurora-red/25 transition-colors font-medium"
               >
